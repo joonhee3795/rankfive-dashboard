@@ -165,7 +165,43 @@ const TopBar = ({ title, subtitle, actions }) => (
 /* ---------- 대시보드 ---------- */
 const Dashboard = ({ goto }) => {
   const [url, setUrl] = useState("");
-  const recentScans = [
+  const [loading, setLoading] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
+  const [dbScans, setDbScans] = useState(null);
+
+  useEffect(() => {
+    fetch("/api/history")
+      .then(r => r.json())
+      .then(d => setDbScans(d.rows || []))
+      .catch(() => {});
+  }, []);
+
+  const runScan = async () => {
+    if (!url.trim()) { alert("네이버 플레이스 URL 또는 매장명을 입력하세요"); return; }
+    setLoading(true);
+    setLastResult(null);
+    try {
+      const r = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeName: url,
+          keywords: "고기집,회식장소,점심,저녁,데이트,가족모임",
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "스캔 실패");
+      setLastResult(data);
+      const h = await fetch("/api/history").then(x => x.json());
+      setDbScans(h.rows || []);
+    } catch (e) {
+      alert("에러: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fallbackScans = [
     {
       name: "섬부가든", addr: "대구 수성구 수성동", cat: "삼겹살",
       url: "place.naver.com/restaurant/12489...",
@@ -195,6 +231,25 @@ const Dashboard = ({ goto }) => {
       thumb: "linear-gradient(135deg, #88C7F9, #2B7FFF)",
     },
   ];
+
+  const recentScans = (dbScans && dbScans.length > 0)
+    ? dbScans.map(r => {
+        const results = Array.isArray(r.result) ? r.result : [];
+        const hit = results.filter(x => x.expectedRank && x.expectedRank <= 5).length;
+        return {
+          name: r.store_name,
+          addr: "DB 저장",
+          cat: "분석 완료",
+          url: r.keywords,
+          hit,
+          scanned: results.length,
+          dur: "-",
+          time: new Date(r.created_at).toLocaleString("ko-KR"),
+          status: "완료",
+          thumb: "linear-gradient(135deg, #03C75A, #028A3F)",
+        };
+      })
+    : fallbackScans;
 
   return (
     <div data-screen-label="03 Dashboard">
@@ -248,9 +303,9 @@ const Dashboard = ({ goto }) => {
                     background: "transparent", color: "white",
                     fontSize: 14, fontFamily: "var(--font-mono)",
                   }}/>
-                <button className="btn btn-primary" onClick={() => goto("scan")}
+                <button className="btn btn-primary" onClick={runScan} disabled={loading}
                   style={{ padding: "10px 18px", borderRadius: 10 }}>
-                  분석 시작
+                  {loading ? "분석 중..." : "분석 시작"}
                   <Icon name="arrowR" size={14}/>
                 </button>
               </div>
@@ -268,6 +323,38 @@ const Dashboard = ({ goto }) => {
             </div>
           </div>
         </div>
+
+        {lastResult && (
+          <div className="card" style={{ padding: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700 }}>"{lastResult.storeName}" 분석 결과</h3>
+              <Tag tone="green">Gemini 분석 완료</Tag>
+            </div>
+            <div style={{ display: "grid", gap: 10 }}>
+              {(lastResult.results || []).map((r, i) => (
+                <div key={i} style={{
+                  display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 14,
+                  alignItems: "center", padding: "12px 16px",
+                  background: "var(--surface-2)", borderRadius: 10,
+                }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: 8,
+                    background: r.expectedRank <= 5 ? "var(--green-500)" : "var(--ink-300)",
+                    color: "white", display: "grid", placeItems: "center",
+                    fontWeight: 800, fontSize: 13,
+                  }}>{r.expectedRank}위</div>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{r.keyword}</div>
+                    <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }}>{r.reason}</div>
+                  </div>
+                  <Tag tone={r.difficulty === "낮음" ? "green" : r.difficulty === "보통" ? "warn" : "danger"}>
+                    난이도 {r.difficulty}
+                  </Tag>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 두 컬럼: 최근 스캔 + 인사이트 */}
         <div style={{ display: "grid", gridTemplateColumns: "1.7fr 1fr", gap: 20 }}>
