@@ -181,7 +181,7 @@ async function generateKeywordPool(info, geminiKey, excluded) {
 ${excludedList ? `7. 다음 키워드는 이미 검색했으니 절대 포함하지 마세요. 완전히 새로운 조합을 만드세요: ${JSON.stringify(excludedList)}` : ""}`;
 
   const ctrl = new AbortController();
-  const timeoutId = setTimeout(() => ctrl.abort(), 12000);
+  const timeoutId = setTimeout(() => ctrl.abort(), 20000);
   let r;
   try {
     r = await fetch(
@@ -191,7 +191,10 @@ ${excludedList ? `7. 다음 키워드는 이미 검색했으니 절대 포함하
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" },
+          generationConfig: {
+            responseMimeType: "application/json",
+            thinkingConfig: { thinkingBudget: 0 },
+          },
         }),
         signal: ctrl.signal,
       }
