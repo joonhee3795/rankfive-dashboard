@@ -34,20 +34,74 @@ function cleanKeyword(kw) {
   return result.join(" ");
 }
 
+const GENERIC_NAMES = new Set(["네이버 플레이스", "네이버플레이스", "네이버 지도", "네이버지도", "네이버", "Naver"]);
+
+function cleanName(s) {
+  return (s || "")
+    .replace(" - 네이버 지도", "")
+    .replace(" : 네이버", "")
+    .replace(" | 네이버 플레이스", "")
+    .replace(" - Naver Place", "")
+    .trim();
+}
+
+function extractStoreName(html, placeId) {
+  const candidates = [];
+
+  const og = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/);
+  if (og) candidates.push(cleanName(og[1]));
+
+  const titleM = html.match(/<title>([^<]+)<\/title>/);
+  if (titleM) candidates.push(cleanName(titleM[1]));
+
+  if (placeId) {
+    const near = new RegExp(`"id":"${placeId}"[\\s\\S]{0,800}?"name":"([^"]+)"`);
+    const m = html.match(near);
+    if (m) candidates.push(cleanName(m[1]));
+  }
+
+  for (const pat of [
+    /"businessName"\s*:\s*"([^"]+)"/,
+    /"placeName"\s*:\s*"([^"]+)"/,
+    /"siteName"\s*:\s*"([^"]+)"/,
+    /"name":"([^"]+)","businessCategory"/,
+    /"name":"([^"]+)","types"/,
+  ]) {
+    const m = html.match(pat);
+    if (m) candidates.push(cleanName(m[1]));
+  }
+
+  for (const c of candidates) {
+    if (c && !GENERIC_NAMES.has(c) && c.length >= 2 && c.length < 60) return c;
+  }
+  return candidates[0] || null;
+}
+
 async function getStoreInfo(placeUrl) {
   const placeIdMatch = placeUrl.match(/\/(?:restaurant|place|hairshop)\/(\d+)/);
   const placeId = placeIdMatch ? placeIdMatch[1] : null;
+  const typeMatch = placeUrl.match(/\/(restaurant|place|hairshop)\//);
+  const type = typeMatch ? typeMatch[1] : "restaurant";
 
-  const r = await fetch(placeUrl, { headers: HEADERS });
-  const rawHtml = decodeUnicodeEscapes(await r.text());
-
-  let storeName = null;
-  const og = rawHtml.match(/<meta\s+property="og:title"\s+content="([^"]+)"/);
-  if (og) storeName = og[1].replace(" - 네이버 지도", "").replace(" : 네이버", "").trim();
-  if (!storeName) {
-    const t = rawHtml.match(/<title>([^<]+)<\/title>/);
-    if (t) storeName = t[1].replace(" - 네이버 지도", "").replace(" : 네이버", "").trim();
+  let rawHtml = "";
+  if (placeId) {
+    try {
+      const desktopUrl = `https://pcmap.place.naver.com/${type}/${placeId}/home`;
+      const r = await fetch(desktopUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+          "Accept-Language": "ko-KR,ko;q=0.9",
+        },
+      });
+      if (r.ok) rawHtml = decodeUnicodeEscapes(await r.text());
+    } catch {}
   }
+  if (!rawHtml || rawHtml.length < 2000) {
+    const r2 = await fetch(placeUrl, { headers: HEADERS });
+    rawHtml = decodeUnicodeEscapes(await r2.text());
+  }
+
+  const storeName = extractStoreName(rawHtml, placeId);
 
   const locations = new Set();
   for (const m of rawHtml.matchAll(/"(?:address|roadAddress|jibunAddress|abbrAddress)":"([^"]+)"/g)) {
