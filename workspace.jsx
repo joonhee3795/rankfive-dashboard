@@ -90,76 +90,25 @@ const TopBar = ({ title, subtitle, actions }) => (
 );
 
 /* ---------- 대시보드 ---------- */
-const Dashboard = ({ goto, openResult }) => {
+const Dashboard = ({ goto, openResult, startScan }) => {
   const [url, setUrl] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [lastResult, setLastResult] = useState(null);
   const [dbScans, setDbScans] = useState(null);
 
   useEffect(() => {
     fetch("/api/history")
       .then(r => r.json())
       .then(d => setDbScans(d.rows || []))
-      .catch(() => {});
+      .catch(() => setDbScans([]));
   }, []);
 
-  const runScan = async () => {
+  const runScan = () => {
     if (!url.trim()) { alert("네이버 플레이스 URL을 입력하세요 (m.place.naver.com/...)"); return; }
     if (!/place\.naver\.com\/(restaurant|place|hairshop)\/\d+/.test(url)) {
       alert("올바른 네이버 플레이스 URL 형식이 아닙니다.\n예) https://m.place.naver.com/restaurant/1234567890");
       return;
     }
-    setLoading(true);
-    setLastResult(null);
-    try {
-      const r = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error((data.error || "스캔 실패") + " — " + (data.detail || ""));
-      setLastResult(data);
-      const h = await fetch("/api/history").then(x => x.json());
-      setDbScans(h.rows || []);
-      if (openResult && (h.rows || [])[0]) openResult(h.rows[0]);
-    } catch (e) {
-      alert("에러: " + e.message);
-    } finally {
-      setLoading(false);
-    }
+    if (startScan) startScan(url);
   };
-
-  const fallbackScans = [
-    {
-      name: "섬부가든", addr: "대구 수성구 수성동", cat: "삼겹살",
-      url: "place.naver.com/restaurant/12489...",
-      hit: 10, scanned: 287, dur: "3분 12초",
-      time: "방금 전", status: "완료",
-      thumb: "linear-gradient(135deg, #FFB78C, #EF7C3C)",
-    },
-    {
-      name: "수성못 옆 파스타", addr: "대구 수성구 두산동", cat: "이탈리안",
-      url: "place.naver.com/restaurant/87123...",
-      hit: 7, scanned: 412, dur: "4분 28초",
-      time: "2시간 전", status: "완료",
-      thumb: "linear-gradient(135deg, #B4A7F2, #6E54D9)",
-    },
-    {
-      name: "범어동 헤어샵 lumen", addr: "대구 수성구 범어동", cat: "헤어샵",
-      url: "place.naver.com/hairshop/23448...",
-      hit: 5, scanned: 198, dur: "2분 41초",
-      time: "어제", status: "완료",
-      thumb: "linear-gradient(135deg, #FFD56A, #F4A52B)",
-    },
-    {
-      name: "동성로 진심스시", addr: "대구 중구 동성로2가", cat: "스시",
-      url: "place.naver.com/restaurant/55881...",
-      hit: 0, scanned: 564, dur: "5분 02초",
-      time: "어제", status: "5위 키워드 없음", error: true,
-      thumb: "linear-gradient(135deg, #88C7F9, #2B7FFF)",
-    },
-  ];
 
   const parseRes = r => {
     let v = r.result;
@@ -169,24 +118,22 @@ const Dashboard = ({ goto, openResult }) => {
   const getFound = r => { const v = parseRes(r); return Array.isArray(v) ? v : (v && Array.isArray(v.found) ? v.found : []); };
   const getScanned = r => { const v = parseRes(r); return Array.isArray(v) ? v.length : (v?.scanned || 0); };
 
-  const recentScans = (dbScans && dbScans.length > 0)
-    ? dbScans.map(r => {
-        const found = getFound(r);
-        return {
-          raw: r,
-          name: r.store_name,
-          addr: r.keywords,
-          cat: "",
-          url: r.keywords,
-          hit: found.length,
-          scanned: getScanned(r),
-          dur: "-",
-          time: new Date(r.created_at).toLocaleString("ko-KR"),
-          status: "완료",
-          thumb: "linear-gradient(135deg, #03C75A, #028A3F)",
-        };
-      })
-    : fallbackScans;
+  const recentScans = (dbScans || []).map(r => {
+    const found = getFound(r);
+    return {
+      raw: r,
+      name: r.store_name,
+      addr: r.keywords,
+      cat: "",
+      url: r.keywords,
+      hit: found.length,
+      scanned: getScanned(r),
+      dur: "-",
+      time: new Date(r.created_at).toLocaleString("ko-KR"),
+      status: "완료",
+      thumb: "linear-gradient(135deg, #03C75A, #028A3F)",
+    };
+  });
 
   return (
     <div data-screen-label="03 Dashboard">
@@ -231,9 +178,9 @@ const Dashboard = ({ goto, openResult }) => {
                     background: "transparent", color: "white",
                     fontSize: 14, fontFamily: "var(--font-mono)",
                   }}/>
-                <button className="btn btn-primary" onClick={runScan} disabled={loading}
+                <button className="btn btn-primary" onClick={runScan}
                   style={{ padding: "10px 18px", borderRadius: 10 }}>
-                  {loading ? "분석 중..." : "분석 시작"}
+                  분석 시작
                   <Icon name="arrowR" size={14}/>
                 </button>
               </div>
@@ -245,38 +192,7 @@ const Dashboard = ({ goto, openResult }) => {
           </div>
         </div>
 
-        {lastResult && (
-          <div className="card" style={{ padding: 24 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700 }}>"{lastResult.storeName}" 분석 결과 — {(lastResult.found||[]).length}/10개 발견 (총 {lastResult.scanned || 0}개 검색)</h3>
-              <Tag tone="green">완료</Tag>
-            </div>
-            <div style={{ display: "grid", gap: 10 }}>
-              {(lastResult.found || []).map((r, i) => (
-                <div key={i} style={{
-                  display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 14,
-                  alignItems: "center", padding: "12px 16px",
-                  background: "var(--surface-2)", borderRadius: 10,
-                }}>
-                  <div style={{
-                    width: 32, height: 32, borderRadius: 8,
-                    background: r.expectedRank <= 5 ? "var(--green-500)" : "var(--ink-300)",
-                    color: "white", display: "grid", placeItems: "center",
-                    fontWeight: 800, fontSize: 13,
-                  }}>{r.expectedRank}위</div>
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{r.keyword}</div>
-                    <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }}>{r.reason}</div>
-                  </div>
-                  <Tag tone={r.difficulty === "낮음" ? "green" : r.difficulty === "보통" ? "warn" : "danger"}>
-                    난이도 {r.difficulty}
-                  </Tag>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
+        {dbScans !== null && recentScans.length > 0 && (
         <div>
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <div style={{ padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border)" }}>
@@ -338,6 +254,7 @@ const Dashboard = ({ goto, openResult }) => {
           </div>
 
         </div>
+        )}
 
       </main>
     </div>
@@ -639,4 +556,291 @@ const ResultStat = ({ label, value, suffix, tone }) => (
   </div>
 );
 
-Object.assign(window, { Sidebar, TopBar, Dashboard, History, Results, FilterPill });
+/* ---------- 스캔 진행 화면 ---------- */
+const ScanProgress = ({ url, goto, openResult }) => {
+  const [stage, setStage] = useState("crawl");
+  const [info, setInfo] = useState(null);
+  const [poolSize, setPoolSize] = useState(0);
+  const [scannedCount, setScannedCount] = useState(0);
+  const [foundCount, setFoundCount] = useState(0);
+  const [foundList, setFoundList] = useState([]);
+  const [log, setLog] = useState([]);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+  const logRef = useRef(null);
+  const startedRef = useRef(false);
+
+  const pushLog = useCallback((entry) => {
+    setLog(prev => {
+      const next = [...prev, { ...entry, t: new Date() }];
+      return next.length > 200 ? next.slice(-200) : next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log.length]);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    (async () => {
+      try {
+        const r = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        if (!r.ok && r.headers.get("content-type")?.includes("application/json")) {
+          const data = await r.json();
+          throw new Error((data.error || "스캔 실패") + (data.detail ? " — " + data.detail : ""));
+        }
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done: streamDone, value } = await reader.read();
+          if (streamDone) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            let ev;
+            try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+
+            if (ev.type === "stage_start") {
+              setStage(ev.stage);
+              pushLog({ kind: "info", text: ev.message || ev.stage });
+            } else if (ev.type === "stage_done") {
+              if (ev.stage === "crawl" && ev.info) {
+                setInfo(ev.info);
+                pushLog({ kind: "ok", text: `매장: ${ev.info.storeName} (ID: ${ev.info.placeId}) — 지역 ${ev.info.locations?.length||0} · 메뉴 ${ev.info.menus?.length||0} · 명소 ${ev.info.landmarks?.length||0}` });
+              } else if (ev.stage === "keywords") {
+                setPoolSize(ev.poolSize);
+                pushLog({ kind: "ok", text: `Gemini가 ${ev.poolSize}개의 키워드 생성 완료` });
+              }
+            } else if (ev.type === "check_progress") {
+              setScannedCount(ev.scannedCount);
+              setFoundCount(ev.foundCount);
+              setPoolSize(ev.poolSize);
+              if (ev.foundItem) {
+                setFoundList(prev => [...prev, ev.foundItem]);
+                pushLog({ kind: "hit", text: `★ TOP ${ev.rank} HIT! "${ev.keyword}"` });
+              } else if (ev.status === "광고") {
+                pushLog({ kind: "warn", text: `💸 "${ev.keyword}" — 광고 구역` });
+              } else if (ev.status === "단일매장") {
+                pushLog({ kind: "warn", text: `⚠️ "${ev.keyword}" — 단일매장` });
+              } else if (ev.status === "에러") {
+                pushLog({ kind: "err", text: `× "${ev.keyword}" — 에러` });
+              } else {
+                pushLog({ kind: "miss", text: `× "${ev.keyword}" — 순위 밖` });
+              }
+            } else if (ev.type === "done") {
+              setDone(true);
+              pushLog({ kind: "ok", text: `✅ 완료 — ${ev.found.length}/10개 발견 (총 ${ev.scanned}개 검색)` });
+              const h = await fetch("/api/history").then(x => x.json()).catch(() => ({rows:[]}));
+              const newRow = (h.rows || [])[0];
+              setTimeout(() => { if (newRow && openResult) openResult(newRow); }, 800);
+            } else if (ev.type === "error") {
+              setError(ev.message);
+              pushLog({ kind: "err", text: `❌ ${ev.message}` });
+            }
+          }
+        }
+      } catch (e) {
+        setError(String(e?.message || e));
+        pushLog({ kind: "err", text: `❌ ${e?.message || e}` });
+      }
+    })();
+  }, [url, openResult, pushLog]);
+
+  const stages = [
+    { id: "crawl",    label: "매장 정보 수집",  sub: "플레이스 HTML 파싱 · 메뉴 · 명소 추출" },
+    { id: "keywords", label: "AI 키워드 추론",  sub: "Gemini 2.5가 50+ 키워드 생성" },
+    { id: "check",    label: "오가닉 순위 추적", sub: "모바일 통합검색 5위 이내 정밀 필터링" },
+  ];
+  const stageIdx = stages.findIndex(s => s.id === stage);
+  const overallPct = done ? 100
+    : stage === "crawl" ? 15
+    : stage === "keywords" ? 35
+    : poolSize > 0 ? Math.min(99, 35 + Math.floor((scannedCount / poolSize) * 60))
+    : 35;
+
+  return (
+    <div data-screen-label="04 Scan">
+      <TopBar
+        title="실시간 스캔 진행 중"
+        subtitle={info ? `${info.storeName} · ${(info.locations||[]).slice(0,2).join(" ")}` : "매장 정보 가져오는 중..."}
+        actions={
+          <button className="btn btn-outline btn-sm" onClick={() => goto("dashboard")} disabled={!done && !error}>
+            <Icon name="x" size={14}/> {done || error ? "닫기" : "중단"}
+          </button>
+        }
+      />
+
+      <main style={{ padding: 32, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+
+        {/* 좌측: 매장 정보 + 단계 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div className="card" style={{ padding: 20 }}>
+            {info ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
+                  <div style={{
+                    width: 48, height: 48, borderRadius: 12,
+                    background: "linear-gradient(135deg, #FFB78C, #EF7C3C)",
+                    color: "white", display: "grid", placeItems: "center",
+                    fontWeight: 800, fontSize: 18,
+                  }}>{info.storeName.slice(0, 1)}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <h3 style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>{info.storeName}</h3>
+                      {info.placeId && <Tag tone="outline">place_id: {info.placeId}</Tag>}
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }} className="truncate">
+                      {(info.categories || []).join(" · ")}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {[...(info.locations||[]), ...(info.landmarks||[])].slice(0, 8).map((x, i) => (
+                    <Tag key={i} tone="outline" icon="pin">{x}</Tag>
+                  ))}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 16 }}>
+                  <KpiCell label="지역" value={(info.locations||[]).length} icon="pin"/>
+                  <KpiCell label="메뉴" value={(info.menus||[]).length} icon="list"/>
+                  <KpiCell label="명소" value={(info.landmarks||[]).length} icon="star"/>
+                  <KpiCell label="키워드" value={(info.placeKeywords||[]).length} icon="sparkle"/>
+                </div>
+              </>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--ink-500)" }}>
+                <div className="loader-dot"/> 매장 정보를 가져오는 중...
+              </div>
+            )}
+          </div>
+
+          <div className="card" style={{ padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 700 }}>분석 단계</h3>
+              <span style={{ fontSize: 18, fontWeight: 800, color: "var(--green-600)" }}>{overallPct}%</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-500)", marginBottom: 12 }}>
+              현재 단계: {stages.find(s => s.id === stage)?.label || "준비 중"}
+            </div>
+            <div style={{ height: 6, background: "var(--ink-100)", borderRadius: 999, overflow: "hidden", marginBottom: 18 }}>
+              <div style={{ width: `${overallPct}%`, height: "100%", background: "var(--green-500)", transition: "width 0.3s" }}/>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {stages.map((s, i) => {
+                const isDone = done || i < stageIdx;
+                const isActive = !done && i === stageIdx;
+                return (
+                  <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
+                    <div style={{
+                      width: 26, height: 26, borderRadius: 999,
+                      background: isDone ? "var(--green-500)" : isActive ? "white" : "var(--ink-100)",
+                      border: isActive ? "2px solid var(--green-500)" : "0",
+                      color: isDone ? "white" : isActive ? "var(--green-600)" : "var(--ink-400)",
+                      display: "grid", placeItems: "center",
+                      fontWeight: 800, fontSize: 11,
+                    }}>{isDone ? "✓" : i + 1}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: isDone || isActive ? "var(--ink-900)" : "var(--ink-500)" }}>{s.label}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-500)" }}>{s.sub}</div>
+                    </div>
+                    {isDone && <Tag tone="green">완료</Tag>}
+                    {isActive && <Tag tone="green">진행 중</Tag>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: 20 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              <KpiCell label="검색 완료" value={`${scannedCount} / ${poolSize || "?"}`}/>
+              <KpiCell label="5위 진입" value={foundCount} highlight/>
+              <KpiCell label="남은 목표" value={Math.max(0, 10 - foundCount)}/>
+            </div>
+          </div>
+        </div>
+
+        {/* 우측: 터미널 로그 */}
+        <div style={{
+          background: "#0a0d12",
+          borderRadius: 14, overflow: "hidden",
+          border: "1px solid #1c2128",
+          display: "flex", flexDirection: "column",
+          height: "calc(100vh - 200px)", minHeight: 500,
+        }}>
+          <div style={{
+            padding: "10px 14px", borderBottom: "1px solid #1c2128",
+            display: "flex", alignItems: "center", gap: 10,
+            background: "#11161c",
+          }}>
+            <div style={{ display: "flex", gap: 5 }}>
+              <div style={{ width: 11, height: 11, borderRadius: 999, background: "#ff5f57" }}/>
+              <div style={{ width: 11, height: 11, borderRadius: 999, background: "#ffbd2e" }}/>
+              <div style={{ width: 11, height: 11, borderRadius: 999, background: "#28ca42" }}/>
+            </div>
+            <div style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#8b949e", fontFamily: "var(--font-mono)" }}>
+              rankfive @ scanner — {info?.storeName || "..."}
+            </div>
+            {!done && !error && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#03C75A" }}>
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: "#03C75A", boxShadow: "0 0 6px #03C75A" }}/>
+                LIVE
+              </div>
+            )}
+          </div>
+          <div ref={logRef} style={{
+            flex: 1, overflowY: "auto",
+            padding: "12px 16px",
+            fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.7,
+            color: "#c9d1d9",
+          }}>
+            {log.map((l, i) => {
+              const c = l.kind === "hit" ? "#3fb950"
+                      : l.kind === "ok" ? "#58a6ff"
+                      : l.kind === "warn" ? "#d29922"
+                      : l.kind === "err" ? "#f85149"
+                      : l.kind === "miss" ? "#6e7681"
+                      : "#c9d1d9";
+              return (
+                <div key={i} style={{ display: "flex", gap: 10 }}>
+                  <span style={{ color: "#6e7681", flexShrink: 0 }}>{l.t.toTimeString().slice(0,8)}</span>
+                  <span style={{ color: c }}>{l.kind === "hit" ? "★" : l.kind === "ok" ? "→" : l.kind === "warn" ? "!" : l.kind === "err" ? "✗" : "·"}</span>
+                  <span style={{ color: c }}>{l.text}</span>
+                </div>
+              );
+            })}
+            {!done && !error && (
+              <div style={{ color: "#3fb950", marginTop: 4 }}>
+                <span className="blink">▊</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+      </main>
+    </div>
+  );
+};
+
+const KpiCell = ({ label, value, icon, highlight }) => (
+  <div style={{
+    background: highlight ? "var(--green-50)" : "var(--ink-50)",
+    border: `1px solid ${highlight ? "var(--green-200)" : "var(--border)"}`,
+    borderRadius: 10, padding: "10px 12px",
+  }}>
+    <div style={{ fontSize: 10, color: "var(--ink-500)", fontWeight: 600, marginBottom: 4, letterSpacing: "0.02em" }}>{label}</div>
+    <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em", color: highlight ? "var(--green-700)" : "var(--ink-900)" }}>{value}</div>
+  </div>
+);
+
+Object.assign(window, { Sidebar, TopBar, Dashboard, History, Results, ScanProgress, FilterPill });
