@@ -190,7 +190,7 @@ const Dashboard = ({ goto }) => {
         }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || "스캔 실패");
+      if (!r.ok) throw new Error((data.error || "스캔 실패") + " — " + (data.detail || ""));
       setLastResult(data);
       const h = await fetch("/api/history").then(x => x.json());
       setDbScans(h.rows || []);
@@ -557,23 +557,48 @@ const Row = ({ label, value }) => (
 
 /* ---------- 검색 이력 ---------- */
 const History = ({ goto }) => {
-  const rows = [
-    { name: "섬부가든", cat: "삼겹살", area: "대구 수성구", hit: 10, scanned: 287, dur: "3:12", date: "2026.05.13 14:22", who: "박지훈", status: "완료" },
-    { name: "수성못 옆 파스타", cat: "이탈리안", area: "대구 수성구", hit: 7, scanned: 412, dur: "4:28", date: "2026.05.13 12:08", who: "박지훈", status: "완료" },
-    { name: "범어동 헤어샵 lumen", cat: "헤어샵", area: "대구 수성구", hit: 5, scanned: 198, dur: "2:41", date: "2026.05.12 18:51", who: "김민지", status: "완료" },
-    { name: "동성로 진심스시", cat: "스시", area: "대구 중구", hit: 0, scanned: 564, dur: "5:02", date: "2026.05.12 16:30", who: "김민지", status: "결과없음" },
-    { name: "구암동 곱창집", cat: "곱창", area: "대구 북구", hit: 6, scanned: 312, dur: "3:48", date: "2026.05.12 11:14", who: "박지훈", status: "완료" },
-    { name: "수성구청 카페 nook", cat: "카페", area: "대구 수성구", hit: 9, scanned: 256, dur: "3:01", date: "2026.05.11 17:22", who: "박지훈", status: "완료" },
-    { name: "월배 디저트연구소", cat: "디저트", area: "대구 달서구", hit: 4, scanned: 178, dur: "2:18", date: "2026.05.11 14:05", who: "김민지", status: "완료" },
-    { name: "동대구역 회집", cat: "횟집", area: "대구 동구", hit: 3, scanned: 224, dur: "2:50", date: "2026.05.10 19:33", who: "박지훈", status: "완료" },
-    { name: "두류공원 분식", cat: "분식", area: "대구 달서구", hit: 11, scanned: 341, dur: "4:01", date: "2026.05.10 13:20", who: "김민지", status: "완료" },
-    { name: "테스트 매장 A", cat: "—", area: "—", hit: 0, scanned: 0, dur: "—", date: "2026.05.10 10:08", who: "박지훈", status: "오류" },
+  const [dbRows, setDbRows] = useState(null);
+  const [keyword, setKeyword] = useState("");
+
+  useEffect(() => {
+    fetch("/api/history")
+      .then(r => r.json())
+      .then(d => setDbRows(d.rows || []))
+      .catch(() => setDbRows([]));
+  }, []);
+
+  const mapped = (dbRows || []).map(r => {
+    const results = Array.isArray(r.result) ? r.result : [];
+    const hit = results.filter(x => x.expectedRank && x.expectedRank <= 5).length;
+    const d = new Date(r.created_at);
+    const pad = n => String(n).padStart(2, "0");
+    return {
+      name: r.store_name,
+      cat: "—",
+      area: r.keywords,
+      hit,
+      scanned: results.length,
+      dur: "—",
+      date: `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      who: "나",
+      status: results.length === 0 ? "오류" : hit === 0 ? "결과없음" : "완료",
+    };
+  });
+
+  const fallback = [
+    { name: "(샘플) 섬부가든", cat: "삼겹살", area: "대구 수성구", hit: 10, scanned: 287, dur: "3:12", date: "2026.05.13 14:22", who: "샘플", status: "완료" },
   ];
+
+  const rows = (dbRows === null)
+    ? []
+    : mapped.length > 0
+      ? mapped.filter(r => !keyword || r.name.toLowerCase().includes(keyword.toLowerCase()) || (r.area||"").toLowerCase().includes(keyword.toLowerCase()))
+      : fallback;
 
   return (
     <div data-screen-label="06 History">
       <TopBar title="검색 이력"
-        subtitle="124회의 스캔 기록 · 총 35,820개의 키워드 분석 완료"
+        subtitle={dbRows === null ? "불러오는 중..." : `${(dbRows||[]).length}회의 스캔 기록 · 총 ${(dbRows||[]).reduce((s,r)=>s+(Array.isArray(r.result)?r.result.length:0),0)}개의 키워드 분석 완료`}
         actions={
           <>
             <button className="btn btn-outline btn-sm">
@@ -592,7 +617,9 @@ const History = ({ goto }) => {
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center" }}>
           <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
             <Icon name="search" size={16} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-400)" }}/>
-            <input className="input" placeholder="매장명 또는 키워드로 검색" style={{ paddingLeft: 38 }}/>
+            <input className="input" placeholder="매장명 또는 키워드로 검색"
+              value={keyword} onChange={e => setKeyword(e.target.value)}
+              style={{ paddingLeft: 38 }}/>
           </div>
           <FilterPill label="기간" value="최근 30일"/>
           <FilterPill label="업종" value="전체"/>
@@ -680,7 +707,7 @@ const History = ({ goto }) => {
             padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center",
             borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--ink-500)",
           }}>
-            <div>전체 124개 중 1–10 표시 중</div>
+            <div>전체 {rows.length}개 표시 중</div>
             <div style={{ display: "flex", gap: 4 }}>
               <button className="btn btn-outline btn-sm" style={{ padding: "5px 10px" }} disabled>이전</button>
               {[1,2,3,"...",13].map((p,i) => (
