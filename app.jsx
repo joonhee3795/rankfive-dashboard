@@ -106,12 +106,20 @@ const Root = () => {
 
   const goto = useCallback((s) => setScreen(s), []);
 
+  const renderInner = () => {
+    switch (screen) {
+      case "scan":    return <Scan goto={goto} scanStyle="split"/>;
+      case "results": return <Results goto={goto}/>;
+      case "history": return <History goto={goto}/>;
+      default:        return <Dashboard goto={goto}/>;
+    }
+  };
+
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: "var(--surface-1)" }}>
-      <Sidebar goto={goto}/>
+      <Sidebar goto={goto} active={screen}/>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <TopBar/>
-        <Dashboard goto={goto}/>
+        {renderInner()}
       </div>
     </div>
   );
