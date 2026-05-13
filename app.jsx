@@ -96,7 +96,13 @@ const PrototypeChrome = ({ screen, setScreen }) => (
 
 const Root = () => {
   const [screen, setScreen] = useState("dashboard");
+  const [selectedScan, setSelectedScan] = useState(null);
   const [tweaks, setTweaks] = useState(TWEAK_DEFAULTS);
+
+  const openResult = useCallback((scan) => {
+    setSelectedScan(scan);
+    setScreen("results");
+  }, []);
 
   useEffect(() => {
     const palette = ACCENT_PALETTES[tweaks.accent] || ACCENT_PALETTES["#03C75A"];
@@ -109,9 +115,9 @@ const Root = () => {
   const renderInner = () => {
     switch (screen) {
       case "scan":    return <Scan goto={goto} scanStyle="split"/>;
-      case "results": return <Results goto={goto}/>;
-      case "history": return <History goto={goto}/>;
-      default:        return <Dashboard goto={goto}/>;
+      case "results": return <Results goto={goto} scan={selectedScan}/>;
+      case "history": return <History goto={goto} openResult={openResult}/>;
+      default:        return <Dashboard goto={goto} openResult={openResult}/>;
     }
   };
 
