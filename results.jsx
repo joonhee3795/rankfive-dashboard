@@ -32,13 +32,17 @@ const Results = ({ goto, scan }) => {
     );
   }
 
-  const results = Array.isArray(active.result) ? active.result : (active.result?.found || []);
-  const scannedCount = Array.isArray(active.result) ? active.result.length : (active.result?.scanned || 0);
-  const top5 = results.filter(r => r.expectedRank && r.expectedRank <= 5);
+  let rawResult = active.result;
+  if (typeof rawResult === "string") {
+    try { rawResult = JSON.parse(rawResult); } catch { rawResult = null; }
+  }
+  const results = Array.isArray(rawResult) ? rawResult : (rawResult && Array.isArray(rawResult.found) ? rawResult.found : []);
+  const scannedCount = Array.isArray(rawResult) ? rawResult.length : (rawResult?.scanned || 0);
+  const top5 = results.filter(r => r && r.expectedRank && r.expectedRank <= 5);
   const dist = [0, 0, 0, 0, 0, 0];
-  results.forEach(r => { if (r.expectedRank >= 1 && r.expectedRank <= 5) dist[r.expectedRank]++; });
+  results.forEach(r => { if (r && r.expectedRank >= 1 && r.expectedRank <= 5) dist[r.expectedRank]++; });
 
-  const dateStr = new Date(active.created_at).toLocaleString("ko-KR");
+  const dateStr = active.created_at ? new Date(active.created_at).toLocaleString("ko-KR") : "";
 
   return (
     <div data-screen-label="05 Results">
