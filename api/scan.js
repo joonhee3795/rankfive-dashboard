@@ -180,17 +180,25 @@ async function generateKeywordPool(info, geminiKey, excluded) {
 6. JSON 배열만 응답 (예: ["수성구 고기집", "수성동 천겹살"]).
 ${excludedList ? `7. 다음 키워드는 이미 검색했으니 절대 포함하지 마세요. 완전히 새로운 조합을 만드세요: ${JSON.stringify(excludedList)}` : ""}`;
 
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    }
-  );
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 12000);
+  let r;
+  try {
+    r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" },
+        }),
+        signal: ctrl.signal,
+      }
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!r.ok) throw new Error("Gemini API: " + (await r.text()));
   const data = await r.json();
@@ -286,7 +294,8 @@ export default async function handler(req, res) {
   };
 
   const start = Date.now();
-  const TIMEOUT_MS = 50000;
+  const TIMEOUT_MS = 52000;
+  const SAFETY_MS = 6000;
 
   try {
     send({ type: "stage_start", stage: "crawl", message: "플레이스 페이지 크롤링 중..." });
@@ -319,14 +328,18 @@ export default async function handler(req, res) {
 
     for (let round = 0; round < REPEAT_LIMIT && found.length < TARGET; round++) {
       lastRound = round;
-      if (Date.now() - start > TIMEOUT_MS - 5000) break;
+      const elapsed = Date.now() - start;
+      if (elapsed > TIMEOUT_MS - SAFETY_MS) {
+        send({ type: "info", message: `시간 한계로 추가 검색 중단 (경과 ${Math.round(elapsed/1000)}초)` });
+        break;
+      }
 
       if (round > 0) {
-        send({ type: "retry_start", round, message: `재시도 ${round}/${REPEAT_LIMIT - 1}회차 — Gemini로 새 키워드 생성 중...` });
+        send({ type: "retry_start", round, message: `재시도 ${round}/${REPEAT_LIMIT - 1}회차 — Gemini로 새 키워드 생성 중... (현재 ${found.length}/10 발견)` });
         try {
           pool = await generateKeywordPool(info, geminiKey, searchedSet);
         } catch (e) {
-          send({ type: "info", message: `재시도 ${round} — Gemini 호출 실패, 종료합니다.` });
+          send({ type: "info", message: `재시도 ${round} — Gemini 호출 실패: ${String(e?.message || e)}` });
           break;
         }
         totalPoolSize += pool.length;
@@ -342,7 +355,10 @@ export default async function handler(req, res) {
       }
 
       for (let i = 0; i < newKeywords.length && found.length < TARGET; i += BATCH) {
-        if (Date.now() - start > TIMEOUT_MS - 3000) break;
+        if (Date.now() - start > TIMEOUT_MS - SAFETY_MS) {
+          send({ type: "info", message: "검색 시간 한계 도달 — 결과 정리 중" });
+          break;
+        }
 
         const batch = newKeywords.slice(i, i + BATCH);
         batch.forEach(kw => searchedSet.add(kw));
@@ -394,6 +410,10 @@ export default async function handler(req, res) {
       },
     };
 
+    send({
+      type: "saving",
+      message: "DB에 결과 저장 중...",
+    });
     try {
       await sql`
         INSERT INTO scans (store_name, keywords, result)
@@ -401,6 +421,7 @@ export default async function handler(req, res) {
       `;
     } catch (e) {
       console.error("DB insert failed", e);
+      send({ type: "info", message: "DB 저장 실패 (결과는 화면에 표시됨)" });
     }
 
     send({
