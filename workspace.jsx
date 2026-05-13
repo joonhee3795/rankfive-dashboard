@@ -116,7 +116,13 @@ const Dashboard = ({ goto, openResult, startScan }) => {
     return v;
   };
   const getFound = r => { const v = parseRes(r); return Array.isArray(v) ? v : (v && Array.isArray(v.found) ? v.found : []); };
-  const getScanned = r => { const v = parseRes(r); return Array.isArray(v) ? v.length : (v?.scanned || 0); };
+  const getScanned = r => {
+    const v = parseRes(r);
+    if (Array.isArray(v)) return v.length;
+    if (Array.isArray(v?.scanned)) return v.scanned.length;
+    if (typeof v?.scanned === "number") return v.scanned;
+    return v?.scannedCount || 0;
+  };
 
   const recentScans = (dbScans || []).map(r => {
     const found = getFound(r);
@@ -301,7 +307,10 @@ const History = ({ goto, openResult }) => {
     let v = r.result;
     if (typeof v === "string") { try { v = JSON.parse(v); } catch { v = null; } }
     const found = Array.isArray(v) ? v : (v && Array.isArray(v.found) ? v.found : []);
-    const scannedCnt = Array.isArray(v) ? v.length : (v?.scanned || 0);
+    const scannedCnt = Array.isArray(v) ? v.length
+      : Array.isArray(v?.scanned) ? v.scanned.length
+      : typeof v?.scanned === "number" ? v.scanned
+      : (v?.scannedCount || 0);
     const d = new Date(r.created_at);
     const pad = n => String(n).padStart(2, "0");
     return {
@@ -331,7 +340,14 @@ const History = ({ goto, openResult }) => {
   return (
     <div data-screen-label="06 History">
       <TopBar title="검색 이력"
-        subtitle={dbRows === null ? "불러오는 중..." : `${(dbRows||[]).length}회의 스캔 기록 · 총 ${(dbRows||[]).reduce((s,r)=>s+(Array.isArray(r.result)?r.result.length:(r.result?.scanned||0)),0)}개 키워드 검색`}
+        subtitle={dbRows === null ? "불러오는 중..." : `${(dbRows||[]).length}회의 스캔 기록 · 총 ${(dbRows||[]).reduce((s,r)=>{
+          let v = r.result;
+          if (typeof v === "string") { try { v = JSON.parse(v); } catch { v = null; } }
+          if (Array.isArray(v)) return s + v.length;
+          if (Array.isArray(v?.scanned)) return s + v.scanned.length;
+          if (typeof v?.scanned === "number") return s + v.scanned;
+          return s + (v?.scannedCount || 0);
+        },0)}개 키워드 검색`}
       />
       <main style={{ padding: 32, maxWidth: 1400 }}>
         {/* 필터 바 */}
@@ -428,6 +444,7 @@ const FilterPill = ({ label, value }) => (
 /* ---------- 결과 화면 ---------- */
 const Results = ({ goto, scan }) => {
   const [latest, setLatest] = useState(null);
+  const [showSearched, setShowSearched] = useState(false);
 
   useEffect(() => {
     if (scan) return;
@@ -460,7 +477,11 @@ const Results = ({ goto, scan }) => {
     try { rawResult = JSON.parse(rawResult); } catch { rawResult = null; }
   }
   const results = Array.isArray(rawResult) ? rawResult : (rawResult && Array.isArray(rawResult.found) ? rawResult.found : []);
-  const scannedCount = Array.isArray(rawResult) ? rawResult.length : (rawResult?.scanned || 0);
+  const searchedList = (rawResult && Array.isArray(rawResult.scanned)) ? rawResult.scanned : [];
+  const scannedCount = Array.isArray(rawResult)
+    ? rawResult.length
+    : (Array.isArray(rawResult?.scanned) ? rawResult.scanned.length : (typeof rawResult?.scanned === "number" ? rawResult.scanned : 0));
+  const rounds = rawResult?.rounds || 1;
   const top5 = results.filter(r => r && r.expectedRank && r.expectedRank <= 5);
   const dist = [0, 0, 0, 0, 0, 0];
   results.forEach(r => { if (r && r.expectedRank >= 1 && r.expectedRank <= 5) dist[r.expectedRank]++; });
@@ -476,11 +497,22 @@ const Results = ({ goto, scan }) => {
           {" · "}{dateStr} 완료
         </>}
         actions={
-          <button className="btn btn-outline btn-sm" onClick={() => goto("history")}>
-            <Icon name="history" size={14}/> 다른 분석 보기
-          </button>
+          <>
+            {searchedList.length > 0 && (
+              <button className="btn btn-outline btn-sm" onClick={() => setShowSearched(true)}>
+                <Icon name="list" size={14}/> 검색한 키워드 보기 ({searchedList.length})
+              </button>
+            )}
+            <button className="btn btn-outline btn-sm" onClick={() => goto("history")}>
+              <Icon name="history" size={14}/> 다른 분석 보기
+            </button>
+          </>
         }
       />
+
+      {showSearched && (
+        <SearchedKeywordsModal items={searchedList} onClose={() => setShowSearched(false)}/>
+      )}
 
       <main style={{ padding: 32, maxWidth: 1400 }}>
         <div style={{
@@ -495,7 +527,7 @@ const Results = ({ goto, scan }) => {
               {active.keywords}
             </div>
           </div>
-          <ResultStat label="검색한 키워드" value={scannedCount} suffix="개"/>
+          <ResultStat label={`검색한 키워드${rounds > 1 ? ` (${rounds}회차)` : ""}`} value={scannedCount} suffix="개"/>
           <ResultStat label="5위 이내" value={top5.length} suffix="개" tone="green"/>
           <ResultStat label="1위 진입" value={dist[1]} suffix="개" tone="green"/>
           <ResultStat label="2~3위" value={dist[2] + dist[3]} suffix="개"/>
@@ -539,6 +571,113 @@ const Results = ({ goto, scan }) => {
           )}
         </div>
       </main>
+    </div>
+  );
+};
+
+const SearchedKeywordsModal = ({ items, onClose }) => {
+  const [filter, setFilter] = useState("all");
+  const [q, setQ] = useState("");
+
+  const stats = items.reduce((s, it) => {
+    s.total++;
+    if (it.status === "상위노출") s.hit++;
+    else if (it.status === "광고") s.ad++;
+    else if (it.status === "단일매장") s.single++;
+    else if (it.status === "에러") s.err++;
+    else s.miss++;
+    return s;
+  }, { total: 0, hit: 0, miss: 0, ad: 0, single: 0, err: 0 });
+
+  const filtered = items.filter(it => {
+    if (filter === "hit" && it.status !== "상위노출") return false;
+    if (filter === "miss" && it.status !== "순위밖") return false;
+    if (filter === "ad" && it.status !== "광고") return false;
+    if (q && !it.keyword.toLowerCase().includes(q.toLowerCase())) return false;
+    return true;
+  });
+
+  const FILTER_BTNS = [
+    { id: "all",  label: `전체 (${stats.total})` },
+    { id: "hit",  label: `5위 진입 (${stats.hit})`, color: "green" },
+    { id: "miss", label: `순위 밖 (${stats.miss})`, color: "gray" },
+    { id: "ad",   label: `광고 (${stats.ad})`, color: "warn" },
+  ];
+
+  const tone = (st) => st === "상위노출" ? "green"
+    : st === "광고" ? "warn"
+    : st === "단일매장" ? "info"
+    : st === "에러" ? "danger" : "gray";
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0,
+      background: "rgba(15, 20, 25, 0.55)",
+      backdropFilter: "blur(4px)",
+      zIndex: 100,
+      display: "grid", placeItems: "center",
+      padding: 20,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "white", borderRadius: 16,
+        width: "100%", maxWidth: 720, maxHeight: "85vh",
+        display: "flex", flexDirection: "column",
+        boxShadow: "0 24px 64px rgba(0,0,0,0.3)",
+        overflow: "hidden",
+      }}>
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <h3 style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>검색한 키워드 전체 보기</h3>
+            <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }}>
+              총 {stats.total}개 — 5위 진입 {stats.hit}, 순위 밖 {stats.miss}, 광고 {stats.ad}, 단일매장 {stats.single}, 에러 {stats.err}
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            width: 32, height: 32, borderRadius: 8,
+            background: "var(--ink-100)", display: "grid", placeItems: "center",
+          }}>
+            <Icon name="x" size={14}/>
+          </button>
+        </div>
+
+        <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+            <Icon name="search" size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-400)" }}/>
+            <input className="input" placeholder="키워드 검색"
+              value={q} onChange={e => setQ(e.target.value)}
+              style={{ paddingLeft: 34, height: 34, fontSize: 13 }}/>
+          </div>
+          {FILTER_BTNS.map(b => (
+            <button key={b.id} onClick={() => setFilter(b.id)}
+              className={filter === b.id ? "btn btn-dark btn-sm" : "btn btn-outline btn-sm"}
+              style={{ padding: "6px 10px", fontSize: 12 }}>
+              {b.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: 32, textAlign: "center", color: "var(--ink-500)" }}>일치하는 키워드가 없습니다.</div>
+          ) : filtered.map((it, i) => (
+            <div key={i} style={{
+              display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12,
+              alignItems: "center", padding: "10px 24px",
+              borderTop: i === 0 ? "0" : "1px solid var(--border)",
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }} className="truncate">{it.keyword}</div>
+              {it.rank ? (
+                <div style={{
+                  fontSize: 12, fontWeight: 800, color: "var(--green-600)",
+                  background: "var(--green-50)", padding: "3px 8px", borderRadius: 6,
+                  minWidth: 36, textAlign: "center",
+                }}>{it.rank}위</div>
+              ) : <div/>}
+              <Tag tone={tone(it.status)}>{it.status}</Tag>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };
@@ -843,4 +982,4 @@ const KpiCell = ({ label, value, icon, highlight }) => (
   </div>
 );
 
-Object.assign(window, { Sidebar, TopBar, Dashboard, History, Results, ScanProgress, FilterPill });
+Object.assign(window, { Sidebar, TopBar, Dashboard, History, Results, ScanProgress, SearchedKeywordsModal, FilterPill });
