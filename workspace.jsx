@@ -104,17 +104,18 @@ const Dashboard = ({ goto, openResult }) => {
   }, []);
 
   const runScan = async () => {
-    if (!url.trim()) { alert("네이버 플레이스 URL 또는 매장명을 입력하세요"); return; }
+    if (!url.trim()) { alert("네이버 플레이스 URL을 입력하세요 (m.place.naver.com/...)"); return; }
+    if (!/place\.naver\.com\/(restaurant|place|hairshop)\/\d+/.test(url)) {
+      alert("올바른 네이버 플레이스 URL 형식이 아닙니다.\n예) https://m.place.naver.com/restaurant/1234567890");
+      return;
+    }
     setLoading(true);
     setLastResult(null);
     try {
       const r = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          storeName: url,
-          keywords: "고기집,회식장소,점심,저녁,데이트,가족모임",
-        }),
+        body: JSON.stringify({ url }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error((data.error || "스캔 실패") + " — " + (data.detail || ""));
@@ -160,18 +161,20 @@ const Dashboard = ({ goto, openResult }) => {
     },
   ];
 
+  const getFound = r => Array.isArray(r.result) ? r.result : (r.result?.found || []);
+  const getScanned = r => Array.isArray(r.result) ? r.result.length : (r.result?.scanned || 0);
+
   const recentScans = (dbScans && dbScans.length > 0)
     ? dbScans.map(r => {
-        const results = Array.isArray(r.result) ? r.result : [];
-        const hit = results.filter(x => x.expectedRank && x.expectedRank <= 5).length;
+        const found = getFound(r);
         return {
           raw: r,
           name: r.store_name,
-          addr: "DB 저장",
-          cat: "분석 완료",
+          addr: r.keywords,
+          cat: "",
           url: r.keywords,
-          hit,
-          scanned: results.length,
+          hit: found.length,
+          scanned: getScanned(r),
           dur: "-",
           time: new Date(r.created_at).toLocaleString("ko-KR"),
           status: "완료",
@@ -202,8 +205,8 @@ const Dashboard = ({ goto, openResult }) => {
             <div>
               <Tag tone="green" size="lg">⚡ 빠른 스캔</Tag>
               <h2 style={{ fontSize: 28, fontWeight: 800, marginTop: 12, letterSpacing: "-0.035em", lineHeight: 1.2 }}>
-                새 매장의 5위 키워드,<br/>
-                URL만 붙여넣으면 끝.
+                네이버 모바일 플레이스 URL을<br/>
+                붙여넣으면 5위 키워드 10개 추출.
               </h2>
               <div style={{
                 marginTop: 24,
@@ -240,11 +243,11 @@ const Dashboard = ({ goto, openResult }) => {
         {lastResult && (
           <div className="card" style={{ padding: 24 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700 }}>"{lastResult.storeName}" 분석 결과</h3>
-              <Tag tone="green">Gemini 분석 완료</Tag>
+              <h3 style={{ fontSize: 16, fontWeight: 700 }}>"{lastResult.storeName}" 분석 결과 — {(lastResult.found||[]).length}/10개 발견 (총 {lastResult.scanned || 0}개 검색)</h3>
+              <Tag tone="green">완료</Tag>
             </div>
             <div style={{ display: "grid", gap: 10 }}>
-              {(lastResult.results || []).map((r, i) => (
+              {(lastResult.found || []).map((r, i) => (
                 <div key={i} style={{
                   display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 14,
                   alignItems: "center", padding: "12px 16px",
@@ -373,8 +376,8 @@ const History = ({ goto, openResult }) => {
   }, []);
 
   const mapped = (dbRows || []).map(r => {
-    const results = Array.isArray(r.result) ? r.result : [];
-    const hit = results.filter(x => x.expectedRank && x.expectedRank <= 5).length;
+    const found = Array.isArray(r.result) ? r.result : (r.result?.found || []);
+    const scannedCnt = Array.isArray(r.result) ? r.result.length : (r.result?.scanned || 0);
     const d = new Date(r.created_at);
     const pad = n => String(n).padStart(2, "0");
     return {
@@ -382,12 +385,12 @@ const History = ({ goto, openResult }) => {
       name: r.store_name,
       cat: "—",
       area: r.keywords,
-      hit,
-      scanned: results.length,
+      hit: found.length,
+      scanned: scannedCnt,
       dur: "—",
       date: `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
       who: "나",
-      status: results.length === 0 ? "오류" : hit === 0 ? "결과없음" : "완료",
+      status: scannedCnt === 0 ? "오류" : found.length === 0 ? "결과없음" : "완료",
     };
   });
 
@@ -404,7 +407,7 @@ const History = ({ goto, openResult }) => {
   return (
     <div data-screen-label="06 History">
       <TopBar title="검색 이력"
-        subtitle={dbRows === null ? "불러오는 중..." : `${(dbRows||[]).length}회의 스캔 기록 · 총 ${(dbRows||[]).reduce((s,r)=>s+(Array.isArray(r.result)?r.result.length:0),0)}개의 키워드 분석 완료`}
+        subtitle={dbRows === null ? "불러오는 중..." : `${(dbRows||[]).length}회의 스캔 기록 · 총 ${(dbRows||[]).reduce((s,r)=>s+(Array.isArray(r.result)?r.result.length:(r.result?.scanned||0)),0)}개 키워드 검색`}
       />
       <main style={{ padding: 32, maxWidth: 1400 }}>
         {/* 필터 바 */}
