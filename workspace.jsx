@@ -161,8 +161,13 @@ const Dashboard = ({ goto, openResult }) => {
     },
   ];
 
-  const getFound = r => Array.isArray(r.result) ? r.result : (r.result?.found || []);
-  const getScanned = r => Array.isArray(r.result) ? r.result.length : (r.result?.scanned || 0);
+  const parseRes = r => {
+    let v = r.result;
+    if (typeof v === "string") { try { v = JSON.parse(v); } catch { v = null; } }
+    return v;
+  };
+  const getFound = r => { const v = parseRes(r); return Array.isArray(v) ? v : (v && Array.isArray(v.found) ? v.found : []); };
+  const getScanned = r => { const v = parseRes(r); return Array.isArray(v) ? v.length : (v?.scanned || 0); };
 
   const recentScans = (dbScans && dbScans.length > 0)
     ? dbScans.map(r => {
@@ -376,8 +381,10 @@ const History = ({ goto, openResult }) => {
   }, []);
 
   const mapped = (dbRows || []).map(r => {
-    const found = Array.isArray(r.result) ? r.result : (r.result?.found || []);
-    const scannedCnt = Array.isArray(r.result) ? r.result.length : (r.result?.scanned || 0);
+    let v = r.result;
+    if (typeof v === "string") { try { v = JSON.parse(v); } catch { v = null; } }
+    const found = Array.isArray(v) ? v : (v && Array.isArray(v.found) ? v.found : []);
+    const scannedCnt = Array.isArray(v) ? v.length : (v?.scanned || 0);
     const d = new Date(r.created_at);
     const pad = n => String(n).padStart(2, "0");
     return {
