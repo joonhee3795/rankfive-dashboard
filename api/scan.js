@@ -1,6 +1,7 @@
 // POST /api/scan
 // body: { storeName: string, keywords: string }
-// Gemini로 키워드 분석 결과를 받아 반환
+
+import { sql } from "./_db.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -48,6 +49,15 @@ export default async function handler(req, res) {
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = []; }
+
+    try {
+      await sql`
+        INSERT INTO scans (store_name, keywords, result)
+        VALUES (${storeName}, ${keywords}, ${JSON.stringify(parsed)})
+      `;
+    } catch (dbErr) {
+      console.error("DB insert failed", dbErr);
+    }
 
     return res.status(200).json({ storeName, keywords, results: parsed });
   } catch (e) {
