@@ -32,9 +32,10 @@ const Results = ({ goto, scan }) => {
     );
   }
 
-  const results = Array.isArray(active.result) ? active.result : [];
-  const top5    = results.filter(r => r.expectedRank && r.expectedRank <= 5);
-  const dist    = [0, 0, 0, 0, 0, 0];
+  const results = Array.isArray(active.result) ? active.result : (active.result?.found || []);
+  const scannedCount = Array.isArray(active.result) ? active.result.length : (active.result?.scanned || 0);
+  const top5 = results.filter(r => r.expectedRank && r.expectedRank <= 5);
+  const dist = [0, 0, 0, 0, 0, 0];
   results.forEach(r => { if (r.expectedRank >= 1 && r.expectedRank <= 5) dist[r.expectedRank]++; });
 
   const dateStr = new Date(active.created_at).toLocaleString("ko-KR");
@@ -65,11 +66,11 @@ const Results = ({ goto, scan }) => {
           <div>
             <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>매장</div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>{active.store_name}</div>
-            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4, fontFamily: "var(--font-mono)" }}>
-              분석 키워드: {active.keywords}
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4, fontFamily: "var(--font-mono)" }} className="truncate">
+              {active.keywords}
             </div>
           </div>
-          <Stat label="분석 키워드" value={results.length} suffix="개"/>
+          <Stat label="검색한 키워드" value={scannedCount} suffix="개"/>
           <Stat label="5위 이내" value={top5.length} suffix="개" tone="green"/>
           <Stat label="1위 진입" value={dist[1]} suffix="개" tone="green"/>
           <Stat label="2~3위" value={dist[2] + dist[3]} suffix="개"/>
