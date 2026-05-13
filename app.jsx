@@ -97,11 +97,17 @@ const PrototypeChrome = ({ screen, setScreen }) => (
 const Root = () => {
   const [screen, setScreen] = useState("dashboard");
   const [selectedScan, setSelectedScan] = useState(null);
+  const [scanUrl, setScanUrl] = useState(null);
   const [tweaks, setTweaks] = useState(TWEAK_DEFAULTS);
 
   const openResult = useCallback((scan) => {
     setSelectedScan(scan);
     setScreen("results");
+  }, []);
+
+  const startScan = useCallback((url) => {
+    setScanUrl(url);
+    setScreen("scan");
   }, []);
 
   useEffect(() => {
@@ -114,9 +120,10 @@ const Root = () => {
 
   const renderInner = () => {
     switch (screen) {
+      case "scan":    return <ScanProgress key={scanUrl} url={scanUrl} goto={goto} openResult={openResult}/>;
       case "results": return <Results goto={goto} scan={selectedScan}/>;
       case "history": return <History goto={goto} openResult={openResult}/>;
-      default:        return <Dashboard goto={goto} openResult={openResult}/>;
+      default:        return <Dashboard goto={goto} openResult={openResult} startScan={startScan}/>;
     }
   };
 
