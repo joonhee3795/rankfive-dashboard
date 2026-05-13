@@ -90,7 +90,7 @@ const TopBar = ({ title, subtitle, actions }) => (
 );
 
 /* ---------- 대시보드 ---------- */
-const Dashboard = ({ goto }) => {
+const Dashboard = ({ goto, openResult }) => {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [lastResult, setLastResult] = useState(null);
@@ -121,6 +121,7 @@ const Dashboard = ({ goto }) => {
       setLastResult(data);
       const h = await fetch("/api/history").then(x => x.json());
       setDbScans(h.rows || []);
+      if (openResult && (h.rows || [])[0]) openResult(h.rows[0]);
     } catch (e) {
       alert("에러: " + e.message);
     } finally {
@@ -164,6 +165,7 @@ const Dashboard = ({ goto }) => {
         const results = Array.isArray(r.result) ? r.result : [];
         const hit = results.filter(x => x.expectedRank && x.expectedRank <= 5).length;
         return {
+          raw: r,
           name: r.store_name,
           addr: "DB 저장",
           cat: "분석 완료",
@@ -282,7 +284,7 @@ const Dashboard = ({ goto }) => {
             <div>
               {recentScans.map((s, i) => (
                 <div key={i}
-                  onClick={() => goto("results")}
+                  onClick={() => s.raw && openResult ? openResult(s.raw) : goto("results")}
                   style={{
                     display: "grid",
                     gridTemplateColumns: "44px 1fr auto auto auto",
@@ -359,7 +361,7 @@ const Row = ({ label, value }) => (
 );
 
 /* ---------- 검색 이력 ---------- */
-const History = ({ goto }) => {
+const History = ({ goto, openResult }) => {
   const [dbRows, setDbRows] = useState(null);
   const [keyword, setKeyword] = useState("");
 
@@ -376,6 +378,7 @@ const History = ({ goto }) => {
     const d = new Date(r.created_at);
     const pad = n => String(n).padStart(2, "0");
     return {
+      raw: r,
       name: r.store_name,
       cat: "—",
       area: r.keywords,
@@ -435,7 +438,8 @@ const History = ({ goto }) => {
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i}
-                  style={{ borderTop: "1px solid var(--border)", transition: "background 0.1s" }}
+                  onClick={() => r.raw && openResult && openResult(r.raw)}
+                  style={{ borderTop: "1px solid var(--border)", cursor: r.raw ? "pointer" : "default", transition: "background 0.1s" }}
                   onMouseEnter={e => e.currentTarget.style.background = "var(--ink-50)"}
                   onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                   <td style={{ padding: "14px 24px" }}>
