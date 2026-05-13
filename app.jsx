@@ -114,7 +114,6 @@ const Root = () => {
 
   const renderInner = () => {
     switch (screen) {
-      case "scan":    return <Scan goto={goto} scanStyle="split"/>;
       case "results": return <Results goto={goto} scan={selectedScan}/>;
       case "history": return <History goto={goto} openResult={openResult}/>;
       default:        return <Dashboard goto={goto} openResult={openResult}/>;
