@@ -158,7 +158,8 @@ async function getStoreInfo(placeUrl) {
   };
 }
 
-async function generateKeywordPool(info, geminiKey) {
+async function generateKeywordPool(info, geminiKey, excluded) {
+  const excludedList = excluded && excluded.size > 0 ? [...excluded].slice(0, 200) : null;
   const prompt = `당신은 대한민국 지역 로컬 마케팅 및 네이버 지도 검색어 최적화 전문가입니다.
 사용자가 검색할 법한 자연스러운 '지역명 + 키워드' 조합을 만들어주세요.
 
@@ -176,7 +177,8 @@ async function generateKeywordPool(info, geminiKey) {
 3. 제공된 지역명을 바탕으로 실제 존재하는 주변 명소 이름(범어네거리, 수성못, 수성구청역 등)을 적극 활용.
 4. "지역명+메뉴", "지역명+업종", "명소명+메뉴", "명소명+회식/모임장소" 등 자연 조합 50개.
 5. 매장명(${info.storeName}) 자체가 포함된 키워드는 제외.
-6. JSON 배열만 응답 (예: ["수성구 고기집", "수성동 천겹살"]).`;
+6. JSON 배열만 응답 (예: ["수성구 고기집", "수성동 천겹살"]).
+${excludedList ? `7. 다음 키워드는 이미 검색했으니 절대 포함하지 마세요. 완전히 새로운 조합을 만드세요: ${JSON.stringify(excludedList)}` : ""}`;
 
   const r = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
@@ -295,59 +297,93 @@ export default async function handler(req, res) {
     }
     send({ type: "stage_done", stage: "crawl", info });
 
+    const TARGET = 10;
+    const BATCH = 8;
+    const REPEAT_LIMIT = 5;
+    const found = [];
+    const scannedAll = [];
+    const searchedSet = new Set();
+    let totalPoolSize = 0;
+    let lastRound = 0;
+
     send({ type: "stage_start", stage: "keywords", message: "Gemini 2.5 Flash로 키워드 생성 중..." });
-    const pool = await generateKeywordPool(info, geminiKey);
+    let pool = await generateKeywordPool(info, geminiKey);
     if (pool.length === 0) {
       send({ type: "error", message: "Gemini가 키워드를 반환하지 않았습니다." });
       return res.end();
     }
+    totalPoolSize = pool.length;
     send({ type: "stage_done", stage: "keywords", poolSize: pool.length });
 
     send({ type: "stage_start", stage: "check", poolSize: pool.length, message: "모바일 통합검색 5위 이내 추적 중..." });
 
-    const TARGET = 10;
-    const BATCH = 8;
-    const found = [];
-    const scanned = [];
+    for (let round = 0; round < REPEAT_LIMIT && found.length < TARGET; round++) {
+      lastRound = round;
+      if (Date.now() - start > TIMEOUT_MS - 5000) break;
 
-    for (let i = 0; i < pool.length && found.length < TARGET; i += BATCH) {
-      if (Date.now() - start > TIMEOUT_MS) break;
-
-      const batch = pool.slice(i, i + BATCH);
-      const results = await Promise.all(
-        batch.map(kw => checkRanking(info.placeId, kw).then(r => ({ kw, ...r })))
-      );
-
-      for (const r of results) {
-        scanned.push({ keyword: r.kw, status: r.status, rank: r.rank });
-        let foundItem = null;
-        if (r.status === "상위노출" && found.length < TARGET) {
-          foundItem = {
-            keyword: r.kw,
-            expectedRank: r.rank,
-            difficulty: r.rank <= 2 ? "낮음" : r.rank <= 3 ? "보통" : "높음",
-            reason: `네이버 모바일 검색 ${r.rank}위 노출 (광고 제외)`,
-          };
-          found.push(foundItem);
+      if (round > 0) {
+        send({ type: "retry_start", round, message: `재시도 ${round}/${REPEAT_LIMIT - 1}회차 — Gemini로 새 키워드 생성 중...` });
+        try {
+          pool = await generateKeywordPool(info, geminiKey, searchedSet);
+        } catch (e) {
+          send({ type: "info", message: `재시도 ${round} — Gemini 호출 실패, 종료합니다.` });
+          break;
         }
-        send({
-          type: "check_progress",
-          keyword: r.kw,
-          status: r.status,
-          rank: r.rank,
-          scannedCount: scanned.length,
-          foundCount: found.length,
-          poolSize: pool.length,
-          foundItem,
-        });
+        totalPoolSize += pool.length;
+      }
+
+      const newKeywords = pool.filter(kw => !searchedSet.has(kw));
+      if (newKeywords.length === 0) {
+        send({ type: "info", message: "더 이상 생성 가능한 새 키워드가 없습니다." });
+        break;
+      }
+      if (round > 0) {
+        send({ type: "retry_pool", round, poolSize: newKeywords.length, message: `재시도 ${round} — 새 키워드 ${newKeywords.length}개로 추가 검색` });
+      }
+
+      for (let i = 0; i < newKeywords.length && found.length < TARGET; i += BATCH) {
+        if (Date.now() - start > TIMEOUT_MS - 3000) break;
+
+        const batch = newKeywords.slice(i, i + BATCH);
+        batch.forEach(kw => searchedSet.add(kw));
+        const results = await Promise.all(
+          batch.map(kw => checkRanking(info.placeId, kw).then(r => ({ kw, ...r })))
+        );
+
+        for (const r of results) {
+          scannedAll.push({ keyword: r.kw, status: r.status, rank: r.rank, round });
+          let foundItem = null;
+          if (r.status === "상위노출" && found.length < TARGET) {
+            foundItem = {
+              keyword: r.kw,
+              expectedRank: r.rank,
+              difficulty: r.rank <= 2 ? "낮음" : r.rank <= 3 ? "보통" : "높음",
+              reason: `네이버 모바일 검색 ${r.rank}위 노출 (광고 제외)`,
+            };
+            found.push(foundItem);
+          }
+          send({
+            type: "check_progress",
+            keyword: r.kw,
+            status: r.status,
+            rank: r.rank,
+            scannedCount: scannedAll.length,
+            foundCount: found.length,
+            poolSize: newKeywords.length,
+            round,
+            foundItem,
+          });
+        }
       }
     }
 
     found.sort((a, b) => a.expectedRank - b.expectedRank);
 
     const payload = {
-      scanned: scanned.length,
-      poolSize: pool.length,
+      scanned: scannedAll,
+      scannedCount: scannedAll.length,
+      poolSize: totalPoolSize,
+      rounds: lastRound + 1,
       found,
       meta: {
         placeId: info.placeId,
@@ -371,8 +407,9 @@ export default async function handler(req, res) {
       type: "done",
       storeName: info.storeName,
       placeId: info.placeId,
-      poolSize: pool.length,
-      scanned: scanned.length,
+      poolSize: totalPoolSize,
+      scanned: scannedAll.length,
+      rounds: lastRound + 1,
       found,
     });
     res.end();
