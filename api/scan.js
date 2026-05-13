@@ -271,19 +271,39 @@ export default async function handler(req, res) {
   const geminiKey = process.env.GEMINI_API_KEY;
   if (!geminiKey) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
 
+  // SSE 스트리밍 응답
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (res.flushHeaders) res.flushHeaders();
+
+  const send = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (res.flush) res.flush();
+  };
+
   const start = Date.now();
   const TIMEOUT_MS = 50000;
 
   try {
+    send({ type: "stage_start", stage: "crawl", message: "플레이스 페이지 크롤링 중..." });
     const info = await getStoreInfo(url);
     if (!info.storeName) {
-      return res.status(400).json({ error: "매장 정보를 가져올 수 없습니다. URL을 확인하세요." });
+      send({ type: "error", message: "매장 정보를 가져올 수 없습니다. URL을 확인하세요." });
+      return res.end();
     }
+    send({ type: "stage_done", stage: "crawl", info });
 
+    send({ type: "stage_start", stage: "keywords", message: "Gemini 2.5 Flash로 키워드 생성 중..." });
     const pool = await generateKeywordPool(info, geminiKey);
     if (pool.length === 0) {
-      return res.status(400).json({ error: "키워드 풀 생성 실패", detail: "Gemini가 키워드를 반환하지 않았습니다" });
+      send({ type: "error", message: "Gemini가 키워드를 반환하지 않았습니다." });
+      return res.end();
     }
+    send({ type: "stage_done", stage: "keywords", poolSize: pool.length });
+
+    send({ type: "stage_start", stage: "check", poolSize: pool.length, message: "모바일 통합검색 5위 이내 추적 중..." });
 
     const TARGET = 10;
     const BATCH = 8;
@@ -300,14 +320,26 @@ export default async function handler(req, res) {
 
       for (const r of results) {
         scanned.push({ keyword: r.kw, status: r.status, rank: r.rank });
+        let foundItem = null;
         if (r.status === "상위노출" && found.length < TARGET) {
-          found.push({
+          foundItem = {
             keyword: r.kw,
             expectedRank: r.rank,
             difficulty: r.rank <= 2 ? "낮음" : r.rank <= 3 ? "보통" : "높음",
             reason: `네이버 모바일 검색 ${r.rank}위 노출 (광고 제외)`,
-          });
+          };
+          found.push(foundItem);
         }
+        send({
+          type: "check_progress",
+          keyword: r.kw,
+          status: r.status,
+          rank: r.rank,
+          scannedCount: scanned.length,
+          foundCount: found.length,
+          poolSize: pool.length,
+          foundItem,
+        });
       }
     }
 
@@ -335,14 +367,17 @@ export default async function handler(req, res) {
       console.error("DB insert failed", e);
     }
 
-    return res.status(200).json({
+    send({
+      type: "done",
       storeName: info.storeName,
       placeId: info.placeId,
       poolSize: pool.length,
       scanned: scanned.length,
       found,
     });
+    res.end();
   } catch (e) {
-    return res.status(500).json({ error: "Scan failed", detail: String(e?.message || e) });
+    send({ type: "error", message: String(e?.message || e) });
+    res.end();
   }
 }
