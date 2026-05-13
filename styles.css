@@ -199,6 +199,12 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }
 }
+.blink { animation: blink 1s infinite; }
+.loader-dot {
+  width: 10px; height: 10px; border-radius: 999px;
+  background: var(--green-500);
+  animation: blink 1s infinite;
+}
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
