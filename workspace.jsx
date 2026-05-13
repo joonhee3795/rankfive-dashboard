@@ -180,7 +180,7 @@ const Dashboard = ({ goto }) => {
 
   return (
     <div data-screen-label="03 Dashboard">
-      <TopBar title="대시보드" subtitle="매장명을 5위 이내 키워드를 분석합니다."/>
+      <TopBar title="대시보드" subtitle="5위 이내 키워드를 분석합니다."/>
 
       <main style={{ padding: 32, display: "flex", flexDirection: "column", gap: 24, maxWidth: 1400 }}>
 
