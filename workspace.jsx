@@ -753,6 +753,15 @@ const ScanProgress = ({ url, goto, openResult }) => {
             if (ev.type === "stage_start") {
               setStage(ev.stage);
               pushLog({ kind: "info", text: ev.message || ev.stage });
+            } else if (ev.type === "retry_start") {
+              pushLog({ kind: "info", text: `🔄 ${ev.message}` });
+            } else if (ev.type === "retry_pool") {
+              setPoolSize(prev => prev + (ev.poolSize || 0));
+              pushLog({ kind: "ok", text: ev.message || `재시도 ${ev.round} — 새 키워드 ${ev.poolSize}개 추가` });
+            } else if (ev.type === "info") {
+              pushLog({ kind: "info", text: ev.message });
+            } else if (ev.type === "saving") {
+              pushLog({ kind: "info", text: `💾 ${ev.message}` });
             } else if (ev.type === "stage_done") {
               if (ev.stage === "crawl" && ev.info) {
                 setInfo(ev.info);
