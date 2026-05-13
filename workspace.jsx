@@ -5,22 +5,15 @@
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
 /* ---------- 사이드바 ---------- */
-const Sidebar = ({ active, setActive, onNewScan }) => {
+const Sidebar = ({ active, goto }) => {
   const navItems = [
-    { id: "dashboard", icon: "grid",     label: "대시보드" },
-    { id: "history",   icon: "history",  label: "검색 이력", badge: 124 },
-    { id: "favorites", icon: "bookmark", label: "즐겨찾기" },
-    { id: "alerts",    icon: "bell",     label: "변동 알림", badge: 3, badgeColor: "danger" },
-  ];
-  const secondary = [
-    { id: "team",      icon: "user",     label: "팀 관리" },
-    { id: "billing",   icon: "crown",    label: "요금제 / 결제" },
-    { id: "settings",  icon: "settings", label: "설정" },
+    { id: "dashboard", icon: "grid",    label: "대시보드" },
+    { id: "history",   icon: "history", label: "검색 이력" },
   ];
 
   return (
     <aside style={{
-      width: 248, flexShrink: 0,
+      width: 220, flexShrink: 0,
       background: "white",
       borderRight: "1px solid var(--border)",
       display: "flex", flexDirection: "column",
@@ -32,72 +25,24 @@ const Sidebar = ({ active, setActive, onNewScan }) => {
       </div>
 
       <button
-        onClick={onNewScan}
+        onClick={() => goto("scan")}
         className="btn btn-primary"
         style={{
-          width: "100%", padding: "11px 14px", justifyContent: "space-between",
+          width: "100%", padding: "11px 14px",
           marginBottom: 22, borderRadius: 10, fontSize: 14,
+          justifyContent: "center", gap: 8,
         }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Icon name="plus" size={16} stroke={2.4}/>
-          새 스캔 시작
-        </span>
-        <kbd style={{
-          background: "rgba(255,255,255,0.2)", color: "white",
-          padding: "1px 6px", borderRadius: 5, fontSize: 11,
-          fontFamily: "var(--font-mono)", fontWeight: 600,
-        }}>⌘N</kbd>
+        <Icon name="plus" size={16} stroke={2.4}/>
+        새 스캔 시작
       </button>
 
-      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-400)", padding: "0 10px 8px", letterSpacing: "0.06em" }}>WORKSPACE</div>
       <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {navItems.map(it => (
-          <NavItem key={it.id} {...it} active={active === it.id} onClick={() => setActive(it.id)}/>
-        ))}
-      </nav>
-
-      <div style={{ marginTop: 24, fontSize: 11, fontWeight: 700, color: "var(--ink-400)", padding: "0 10px 8px", letterSpacing: "0.06em" }}>ACCOUNT</div>
-      <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {secondary.map(it => (
-          <NavItem key={it.id} {...it} active={active === it.id} onClick={() => setActive(it.id)}/>
+          <NavItem key={it.id} {...it} active={active === it.id} onClick={() => goto(it.id)}/>
         ))}
       </nav>
 
       <div style={{ flex: 1 }}/>
-
-      {/* 사용량 카드 */}
-      <div style={{
-        background: "linear-gradient(135deg, var(--ink-50) 0%, var(--green-50) 100%)",
-        border: "1px solid var(--green-100)",
-        borderRadius: 12, padding: 16,
-        marginBottom: 12,
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ink-700)" }}>이번 달 사용량</div>
-          <Tag tone="green">Agency</Tag>
-        </div>
-        <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--ink-900)" }}>
-          124 <span style={{ fontSize: 12, color: "var(--ink-500)", fontWeight: 500 }}>/ 200 스캔</span>
-        </div>
-        <div style={{ height: 6, background: "var(--ink-200)", borderRadius: 999, marginTop: 8, overflow: "hidden" }}>
-          <div style={{ width: "62%", height: "100%", background: "var(--green-500)", borderRadius: 999 }}/>
-        </div>
-        <div style={{ fontSize: 11, color: "var(--ink-500)", marginTop: 6 }}>26일 후 갱신 · 76회 남음</div>
-      </div>
-
-      {/* 사용자 */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 10,
-        padding: "10px 8px", borderRadius: 10,
-        background: "var(--ink-50)",
-      }}>
-        <Avatar name="박지훈" size={32}/>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink-900)" }} className="truncate">박지훈</div>
-          <div style={{ fontSize: 11, color: "var(--ink-500)" }} className="truncate">로컬코어 마케팅</div>
-        </div>
-        <Icon name="chevron" size={14} style={{ color: "var(--ink-400)" }}/>
-      </div>
     </aside>
   );
 };
@@ -139,24 +84,6 @@ const TopBar = ({ title, subtitle, actions }) => (
       {subtitle && <div style={{ fontSize: 13, color: "var(--ink-500)", marginTop: 2 }}>{subtitle}</div>}
     </div>
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8,
-        background: "var(--ink-50)", padding: "8px 12px",
-        borderRadius: 10, border: "1px solid var(--border)",
-        width: 300,
-      }}>
-        <Icon name="search" size={16} style={{ color: "var(--ink-400)" }}/>
-        <input placeholder="매장명, URL, 키워드 검색"
-          style={{ flex: 1, border: 0, outline: 0, background: "transparent", fontSize: 13 }}/>
-        <kbd style={{
-          background: "white", color: "var(--ink-500)",
-          padding: "1px 6px", borderRadius: 4, fontSize: 11,
-          fontFamily: "var(--font-mono)", border: "1px solid var(--border)",
-        }}>⌘K</kbd>
-      </div>
-      <button className="btn btn-outline btn-sm" style={{ padding: 9, width: 38, height: 38, borderRadius: 10 }}>
-        <Icon name="bell" size={16}/>
-      </button>
       {actions}
     </div>
   </header>
@@ -253,16 +180,7 @@ const Dashboard = ({ goto }) => {
 
   return (
     <div data-screen-label="03 Dashboard">
-      <TopBar
-        title="대시보드"
-        subtitle="안녕하세요 박지훈님, 오늘도 좋은 키워드를 찾아보세요 ☕"
-        actions={
-          <button className="btn btn-dark btn-sm" onClick={() => goto("scan")}>
-            <Icon name="plus" size={14} stroke={2.4}/>
-            새 스캔
-          </button>
-        }
-      />
+      <TopBar title="대시보드" subtitle="매장명을 입력하면 Gemini가 5위 키워드를 분석합니다."/>
 
       <main style={{ padding: 32, display: "flex", flexDirection: "column", gap: 24, maxWidth: 1400 }}>
 
@@ -278,7 +196,7 @@ const Dashboard = ({ goto }) => {
             backgroundImage: "radial-gradient(rgba(3,199,90,0.18) 1px, transparent 1px)",
             backgroundSize: "28px 28px", opacity: 0.6,
           }}/>
-          <div style={{ position: "relative", display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 40, alignItems: "center" }}>
+          <div style={{ position: "relative" }}>
             <div>
               <Tag tone="green" size="lg">⚡ 빠른 스캔</Tag>
               <h2 style={{ fontSize: 28, fontWeight: 800, marginTop: 12, letterSpacing: "-0.035em", lineHeight: 1.2 }}>
@@ -314,13 +232,6 @@ const Dashboard = ({ goto }) => {
               </div>
             </div>
 
-            {/* 우측 통계 */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <MiniStat label="이번 달 스캔" value="124" delta="+18" tone="green"/>
-              <MiniStat label="발견한 5위 키워드" value="876" delta="+62" tone="green"/>
-              <MiniStat label="평균 완료 시간" value="3:12" delta="-0:28" tone="green" unit=""/>
-              <MiniStat label="활성 매장" value="38" delta="+2" tone="green"/>
-            </div>
           </div>
         </div>
 
@@ -356,26 +267,17 @@ const Dashboard = ({ goto }) => {
           </div>
         )}
 
-        {/* 두 컬럼: 최근 스캔 + 인사이트 */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.7fr 1fr", gap: 20 }}>
-
-          {/* 최근 스캔 */}
+        <div>
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <div style={{ padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border)" }}>
               <div>
                 <h3 style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.02em" }}>최근 분석한 매장</h3>
-                <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }}>최근 7일간의 스캔 결과</div>
+                <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }}>DB에 저장된 최근 스캔</div>
               </div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button className="btn btn-ghost btn-sm">
-                  <Icon name="filter" size={14}/>
-                  필터
-                </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => goto("history")}>
-                  전체보기
-                  <Icon name="arrowR" size={13}/>
-                </button>
-              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => goto("history")}>
+                전체보기
+                <Icon name="arrowR" size={13}/>
+              </button>
             </div>
             <div>
               {recentScans.map((s, i) => (
@@ -400,12 +302,9 @@ const Dashboard = ({ goto }) => {
                     color: "white", fontWeight: 800, fontSize: 14,
                   }}>{s.name.slice(0, 1)}</div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-                      <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.01em" }}>{s.name}</div>
-                      <Tag tone="outline">{s.cat}</Tag>
-                    </div>
-                    <div style={{ fontSize: 12, color: "var(--ink-500)", fontFamily: "var(--font-mono)" }} className="truncate">
-                      {s.addr} · {s.url}
+                    <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.01em", marginBottom: 3 }} className="truncate">{s.name}</div>
+                    <div style={{ fontSize: 12, color: "var(--ink-500)" }} className="truncate">
+                      키워드: {s.url}
                     </div>
                   </div>
                   <div style={{ textAlign: "center", minWidth: 80 }}>
@@ -417,8 +316,7 @@ const Dashboard = ({ goto }) => {
                     <div style={{ fontSize: 10, color: "var(--ink-500)", fontWeight: 600 }}>5위 키워드</div>
                   </div>
                   <div style={{ minWidth: 100, fontSize: 12, color: "var(--ink-500)", textAlign: "right" }}>
-                    <div>{s.scanned}개 스캔</div>
-                    <div>{s.dur}</div>
+                    <div>{s.scanned}개 분석</div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 110, justifyContent: "flex-end" }}>
                     <div style={{ fontSize: 12, color: "var(--ink-500)" }}>{s.time}</div>
@@ -429,101 +327,6 @@ const Dashboard = ({ goto }) => {
             </div>
           </div>
 
-          {/* 인사이트 사이드 */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            <div className="card" style={{ padding: 22 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-                <div>
-                  <h3 style={{ fontSize: 14, fontWeight: 700 }}>5위 발견율</h3>
-                  <div style={{ fontSize: 11, color: "var(--ink-500)", marginTop: 2 }}>최근 30일 · 모든 매장 평균</div>
-                </div>
-                <Tag tone="green" icon="trend">+8.4%</Tag>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-                <Donut value={72} size={92} stroke={10} label="%"/>
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
-                  <Row label="평균 스캔 / 매장" value="287"/>
-                  <Row label="평균 발견 키워드" value="7.3개"/>
-                  <Row label="광고 필터링" value="61%"/>
-                </div>
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: 22 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                <h3 style={{ fontSize: 14, fontWeight: 700 }}>순위 변동 알림</h3>
-                <Tag tone="danger">3 NEW</Tag>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {[
-                  { kw: "수성동 천겹살", from: 4, to: 1, type: "up" },
-                  { kw: "범어네거리 회식", from: 2, to: 6, type: "down" },
-                  { kw: "수성구 헤어샵", from: 5, to: 5, type: "stay" },
-                ].map((a, i) => (
-                  <div key={i} style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    padding: "8px 0",
-                    borderTop: i === 0 ? "0" : "1px dashed var(--border)",
-                  }}>
-                    <div style={{
-                      width: 28, height: 28, borderRadius: 8,
-                      background: a.type === "up" ? "var(--green-50)" : a.type === "down" ? "#FFE9E9" : "var(--ink-100)",
-                      color: a.type === "up" ? "var(--green-600)" : a.type === "down" ? "#B43232" : "var(--ink-500)",
-                      display: "grid", placeItems: "center",
-                    }}>
-                      <Icon name={a.type === "up" ? "arrowU" : a.type === "down" ? "arrowD" : "dot"} size={14} stroke={2.4}/>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }} className="truncate">{a.kw}</div>
-                      <div style={{ fontSize: 11, color: "var(--ink-500)" }}>{a.from}위 → {a.to}위</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* TOP 키워드 차트 */}
-        <div className="card" style={{ padding: 24 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-            <div>
-              <h3 style={{ fontSize: 16, fontWeight: 700 }}>이번 주 가장 많이 발견된 키워드</h3>
-              <div style={{ fontSize: 12, color: "var(--ink-500)", marginTop: 2 }}>전체 매장 통합 · 5위 이내 노출 횟수 기준</div>
-            </div>
-            <div style={{ display: "flex", gap: 4, padding: 3, background: "var(--ink-100)", borderRadius: 8 }}>
-              {["주간", "월간", "분기"].map((t, i) => (
-                <button key={t} style={{
-                  padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600,
-                  background: i === 0 ? "white" : "transparent",
-                  color: i === 0 ? "var(--ink-900)" : "var(--ink-500)",
-                  boxShadow: i === 0 ? "0 1px 2px rgba(0,0,0,0.08)" : "none",
-                }}>{t}</button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-            {[
-              { kw: "수성동 천겹살", count: 23, week: [4, 6, 8, 12, 18, 21, 23] },
-              { kw: "수성구 고기집", count: 18, week: [10, 12, 14, 15, 17, 18, 18] },
-              { kw: "범어네거리 회식", count: 14, week: [2, 4, 6, 8, 10, 12, 14] },
-              { kw: "수성못 맛집", count: 11, week: [5, 7, 7, 9, 10, 10, 11] },
-              { kw: "대구 수성 삼겹살", count: 9, week: [3, 4, 5, 6, 7, 8, 9] },
-            ].map((k, i) => (
-              <div key={i} style={{
-                background: "var(--ink-50)", borderRadius: 12, padding: 16,
-                border: "1px solid var(--border)",
-              }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink-500)", letterSpacing: "0.04em" }}>#{i + 1}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 4, marginBottom: 12, letterSpacing: "-0.01em" }}>{k.kw}</div>
-                <SparkBars data={k.week} color="var(--green-500)" h={32}/>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
-                  <div style={{ fontSize: 12, color: "var(--ink-500)" }}>매장 수</div>
-                  <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em" }}>{k.count}</div>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
 
       </main>
@@ -599,18 +402,6 @@ const History = ({ goto }) => {
     <div data-screen-label="06 History">
       <TopBar title="검색 이력"
         subtitle={dbRows === null ? "불러오는 중..." : `${(dbRows||[]).length}회의 스캔 기록 · 총 ${(dbRows||[]).reduce((s,r)=>s+(Array.isArray(r.result)?r.result.length:0),0)}개의 키워드 분석 완료`}
-        actions={
-          <>
-            <button className="btn btn-outline btn-sm">
-              <Icon name="download" size={14}/>
-              CSV 내보내기
-            </button>
-            <button className="btn btn-dark btn-sm" onClick={() => goto("scan")}>
-              <Icon name="plus" size={14} stroke={2.4}/>
-              새 스캔
-            </button>
-          </>
-        }
       />
       <main style={{ padding: 32, maxWidth: 1400 }}>
         {/* 필터 바 */}
@@ -621,13 +412,8 @@ const History = ({ goto }) => {
               value={keyword} onChange={e => setKeyword(e.target.value)}
               style={{ paddingLeft: 38 }}/>
           </div>
-          <FilterPill label="기간" value="최근 30일"/>
-          <FilterPill label="업종" value="전체"/>
-          <FilterPill label="지역" value="대구 전체"/>
-          <FilterPill label="상태" value="완료만"/>
-          <FilterPill label="담당자" value="모두"/>
           <div style={{ flex: 1 }}/>
-          <button className="btn btn-ghost btn-sm">
+          <button className="btn btn-ghost btn-sm" onClick={() => setKeyword("")}>
             <Icon name="refresh" size={14}/>
             초기화
           </button>
@@ -638,15 +424,10 @@ const History = ({ goto }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "var(--ink-50)", textAlign: "left", color: "var(--ink-600)", fontSize: 12, fontWeight: 700 }}>
-                <th style={{ padding: "12px 16px 12px 24px", width: 28 }}>
-                  <input type="checkbox" style={{ accentColor: "var(--green-500)" }}/>
-                </th>
-                <th style={{ padding: "12px 12px" }}>매장</th>
-                <th style={{ padding: "12px 12px" }}>지역</th>
+                <th style={{ padding: "12px 24px" }}>매장</th>
+                <th style={{ padding: "12px 12px" }}>분석 키워드</th>
                 <th style={{ padding: "12px 12px", textAlign: "right" }}>5위 키워드</th>
-                <th style={{ padding: "12px 12px", textAlign: "right" }}>스캔 수</th>
-                <th style={{ padding: "12px 12px", textAlign: "right" }}>소요</th>
-                <th style={{ padding: "12px 12px" }}>담당자</th>
+                <th style={{ padding: "12px 12px", textAlign: "right" }}>분석 수</th>
                 <th style={{ padding: "12px 12px" }}>일시</th>
                 <th style={{ padding: "12px 24px 12px 12px", textAlign: "right" }}>상태</th>
               </tr>
@@ -654,44 +435,29 @@ const History = ({ goto }) => {
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i}
-                  onClick={() => goto("results")}
-                  style={{ borderTop: "1px solid var(--border)", cursor: "pointer", transition: "background 0.1s" }}
+                  style={{ borderTop: "1px solid var(--border)", transition: "background 0.1s" }}
                   onMouseEnter={e => e.currentTarget.style.background = "var(--ink-50)"}
                   onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                  <td style={{ padding: "14px 16px 14px 24px" }} onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" style={{ accentColor: "var(--green-500)" }}/>
-                  </td>
-                  <td style={{ padding: "14px 12px" }}>
+                  <td style={{ padding: "14px 24px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <div style={{
                         width: 32, height: 32, borderRadius: 8,
                         background: ["#FFB78C", "#B4A7F2", "#FFD56A", "#88C7F9", "#8FE0B6"][i % 5],
                         display: "grid", placeItems: "center",
                         fontWeight: 800, color: "white", fontSize: 13,
-                      }}>{r.name.slice(0, 1)}</div>
-                      <div>
-                        <div style={{ fontWeight: 700, color: "var(--ink-900)" }}>{r.name}</div>
-                        <div style={{ fontSize: 11, color: "var(--ink-500)" }}>{r.cat}</div>
-                      </div>
+                      }}>{(r.name || "?").slice(0, 1)}</div>
+                      <div style={{ fontWeight: 700, color: "var(--ink-900)" }}>{r.name}</div>
                     </div>
                   </td>
-                  <td style={{ padding: "14px 12px", color: "var(--ink-600)" }}>{r.area}</td>
+                  <td style={{ padding: "14px 12px", color: "var(--ink-600)", fontSize: 12 }}>{r.area}</td>
                   <td style={{ padding: "14px 12px", textAlign: "right" }}>
                     <span style={{
                       fontSize: 16, fontWeight: 800,
                       color: r.hit === 0 ? "var(--ink-400)" : "var(--green-600)",
                       letterSpacing: "-0.02em",
                     }}>{r.hit}</span>
-                    <span style={{ fontSize: 11, color: "var(--ink-400)", marginLeft: 2 }}>/10</span>
                   </td>
                   <td style={{ padding: "14px 12px", textAlign: "right", color: "var(--ink-600)", fontFamily: "var(--font-mono)" }}>{r.scanned}</td>
-                  <td style={{ padding: "14px 12px", textAlign: "right", color: "var(--ink-600)", fontFamily: "var(--font-mono)" }}>{r.dur}</td>
-                  <td style={{ padding: "14px 12px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <Avatar name={r.who} size={22}/>
-                      <span style={{ color: "var(--ink-700)" }}>{r.who}</span>
-                    </div>
-                  </td>
                   <td style={{ padding: "14px 12px", color: "var(--ink-500)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{r.date}</td>
                   <td style={{ padding: "14px 24px 14px 12px", textAlign: "right" }}>
                     <Tag tone={r.status === "완료" ? "green" : r.status === "결과없음" ? "gray" : "danger"}
@@ -704,18 +470,10 @@ const History = ({ goto }) => {
             </tbody>
           </table>
           <div style={{
-            padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center",
+            padding: "16px 24px",
             borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--ink-500)",
           }}>
-            <div>전체 {rows.length}개 표시 중</div>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button className="btn btn-outline btn-sm" style={{ padding: "5px 10px" }} disabled>이전</button>
-              {[1,2,3,"...",13].map((p,i) => (
-                <button key={i} className={p === 1 ? "btn btn-dark btn-sm" : "btn btn-outline btn-sm"}
-                  style={{ padding: "5px 10px", minWidth: 32 }}>{p}</button>
-              ))}
-              <button className="btn btn-outline btn-sm" style={{ padding: "5px 10px" }}>다음</button>
-            </div>
+            전체 {rows.length}개 표시 중
           </div>
         </div>
       </main>
