@@ -1,6 +1,5 @@
-// POST /api/scan
-// V2 — Kakao Local API + 네이버 검색광고 keywordstool 통합
-// 흐름: 크롤(좌표 포함) → Kakao로 진짜 주변 POI → Gemini로 자연 조합 → 검색광고 keywordstool로 월간 검색량 검증 → 모바일 5위 추적
+// POST /api/scan — V3
+// 흐름: 크롤 → 네이버 지역검색 Open API로 주변 POI 발견 → Gemini 자연 조합 → 검색광고 keywordstool 검증 → 모바일 5위 추적
 
 import { sql } from "./_db.js";
 import crypto from "crypto";
@@ -16,6 +15,8 @@ const HEADERS = {
 function decodeUnicodeEscapes(text) {
   return text.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
 }
+
+function stripTags(s) { return (s || "").replace(/<[^>]+>/g, "").trim(); }
 
 function cleanKeyword(kw) {
   const words = kw.split(/\s+/).filter(Boolean);
@@ -69,7 +70,6 @@ function extractCoords(html) {
     /"y":\s*"?(-?[3-4]\d\.\d+)"?\s*,\s*"x":\s*"?(-?1[2-3]\d\.\d+)"?/,
     /"longitude":\s*"?(-?1[2-3]\d\.\d+)"?[\s\S]{0,80}?"latitude":\s*"?(-?[3-4]\d\.\d+)"?/,
     /"latitude":\s*"?(-?[3-4]\d\.\d+)"?[\s\S]{0,80}?"longitude":\s*"?(-?1[2-3]\d\.\d+)"?/,
-    /"mapx":\s*"?(-?1[2-3]\d\.?\d*)"?\s*,\s*"mapy":\s*"?(-?[3-4]\d\.?\d*)"?/,
   ];
   for (const p of patterns) {
     const m = html.match(p);
@@ -80,6 +80,26 @@ function extractCoords(html) {
     if (b > 100 && b < 140 && a > 30 && a < 45) return { lng: b, lat: a };
   }
   return null;
+}
+
+function parseAddress(addr) {
+  // "광주광역시 동구 동명동 ..." → { city, gu, dong }
+  if (!addr) return {};
+  const out = {};
+  const parts = addr.split(/\s+/);
+  for (const p of parts) {
+    if (!out.city && /(?:특별시|광역시|특별자치시|특별자치도|도)$/.test(p)) {
+      out.city = p.replace("광역시", "").replace("특별시", "").replace("특별자치시", "").replace("특별자치도", "").replace("도", "");
+    }
+    if (!out.gu && /(?:구|군)$/.test(p) && p.length >= 2) out.gu = p;
+    if (!out.dong) {
+      const cleaned = p.replace(/(동)\d*가$/, "$1");
+      if (/(?:동|읍|면)$/.test(cleaned) && cleaned.length >= 2 && cleaned.length <= 7) {
+        out.dong = cleaned;
+      }
+    }
+  }
+  return out;
 }
 
 async function getStoreInfo(placeUrl) {
@@ -108,15 +128,17 @@ async function getStoreInfo(placeUrl) {
   const storeName = extractStoreName(rawHtml, placeId);
   const coords = extractCoords(rawHtml);
 
-  const locations = new Set();
+  // 주소 추출 - 여러 필드에서 모두 모아서 파싱
+  const addresses = [];
   for (const m of rawHtml.matchAll(/"(?:address|roadAddress|jibunAddress|abbrAddress)":"([^"]+)"/g)) {
-    for (const p of m[1].split(/\s+/)) {
-      const cleaned = p.replace(/(동)\d*가$/, "$1"); // 수성동4가 → 수성동
-      if (/(?:시|도|구|군|읍|면|동)$/.test(cleaned) && cleaned.length >= 2 && cleaned.length <= 7) {
-        locations.add(cleaned);
-      }
-    }
+    addresses.push(m[1]);
   }
+  const parsedAll = addresses.map(parseAddress);
+  const region = {
+    city: parsedAll.find(p => p.city)?.city || null,
+    gu: parsedAll.find(p => p.gu)?.gu || null,
+    dongs: [...new Set(parsedAll.map(p => p.dong).filter(Boolean))],
+  };
 
   const categories = new Set();
   const catMatch = rawHtml.match(/"(?:category|bizCategory)":"([^"]+)"/);
@@ -139,109 +161,131 @@ async function getStoreInfo(placeUrl) {
     storeName,
     placeId,
     coords,
-    locations: [...locations],
+    region,
+    locations: [region.city, region.gu, ...region.dongs].filter(Boolean),
     categories: [...categories],
     menus: [...menus].slice(0, 20),
+    addresses,
   };
 }
 
-const KAKAO_CATEGORIES = [
-  { code: "SW8", label: "지하철역" },
-  { code: "AT4", label: "관광명소" },
-  { code: "PO3", label: "공공기관" },
-  { code: "SC4", label: "학교" },
-  { code: "CT1", label: "문화시설" },
-];
-
-async function getKakaoRegions(coords, kakaoKey) {
-  // coord2regioncode — 좌표 → 행정동(H) + 법정동(B) 둘 다 반환
-  if (!coords || !kakaoKey) return { city: null, gu: null, hDong: null, bDong: null, raw: [] };
+// ============= 네이버 지역 검색 Open API =============
+async function naverLocalSearch(query, naverSearch) {
+  if (!naverSearch?.clientId || !naverSearch?.clientSecret) return { error: "키 없음", items: [] };
   try {
-    const url = `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${coords.lng}&y=${coords.lat}`;
-    const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey}` } });
-    if (!r.ok) return { city: null, gu: null, hDong: null, bDong: null, raw: [] };
-    const data = await r.json();
-    const docs = data.documents || [];
-    const out = { city: null, gu: null, hDong: null, bDong: null, raw: [] };
-    for (const d of docs) {
-      out.raw.push({ type: d.region_type, name: d.region_3depth_name, code: d.code });
-      if (!out.city) out.city = (d.region_1depth_name || "").replace("광역시", "").replace("특별시", "").replace("특별자치시", "").replace("특별자치도", "");
-      if (!out.gu) out.gu = d.region_2depth_name;
-      if (d.region_type === "H") out.hDong = d.region_3depth_name;
-      if (d.region_type === "B") out.bDong = d.region_3depth_name;
+    const url = `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(query)}&display=5&sort=random`;
+    const r = await fetch(url, {
+      headers: {
+        "X-Naver-Client-Id": naverSearch.clientId,
+        "X-Naver-Client-Secret": naverSearch.clientSecret,
+      },
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      return { error: `HTTP ${r.status} — ${text.slice(0, 200)}`, items: [] };
     }
-    return out;
-  } catch {
-    return { city: null, gu: null, hDong: null, bDong: null, raw: [] };
+    const data = await r.json();
+    const items = (data.items || []).map(item => {
+      // mapx, mapy는 WGS84 * 10^7 정수
+      const mapx = item.mapx ? parseFloat(item.mapx) / 1e7 : null;
+      const mapy = item.mapy ? parseFloat(item.mapy) / 1e7 : null;
+      return {
+        name: stripTags(item.title),
+        category: item.category || "",
+        address: item.address || "",
+        roadAddress: item.roadAddress || "",
+        mapx, mapy,
+      };
+    });
+    return { error: null, items };
+  } catch (e) {
+    return { error: String(e?.message || e), items: [] };
   }
 }
 
-async function getKakaoKeywordLandmarks(coords, kakaoKey, query) {
-  // 좌표 기준 키워드 검색 — 잘 알려진 명소(예술의거리, 거리, 광장) 찾기
-  if (!coords || !kakaoKey) return [];
-  try {
-    const url = `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&x=${coords.lng}&y=${coords.lat}&radius=2000&size=10&sort=accuracy`;
-    const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey}` } });
-    if (!r.ok) return [];
-    const data = await r.json();
-    return (data.documents || [])
-      .map(d => (d.place_name || "").trim())
-      .filter(n => n.length >= 2 && n.length <= 15);
-  } catch { return []; }
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-async function getKakaoNearbyPOIs(coords, kakaoKey, onDiag) {
-  if (!coords || !kakaoKey) return [];
-  const all = [];
+async function getNearbyPOIs(info, naverSearch, onDiag) {
+  if (!naverSearch?.clientId) return { pois: [], extraDongs: [] };
+
+  const city = info.region.city;
+  const gu = info.region.gu;
+  const dongs = info.region.dongs;
+
+  // 핵심 쿼리들 - "지역 + POI 카테고리" 형태
+  const queries = [];
+  if (gu && city) {
+    queries.push(`${city} ${gu} 지하철역`);
+    queries.push(`${city} ${gu} 명소`);
+    queries.push(`${city} ${gu} 거리`);
+    queries.push(`${city} ${gu} 공원`);
+  } else if (gu) {
+    queries.push(`${gu} 지하철역`);
+    queries.push(`${gu} 명소`);
+  }
+  if (dongs[0]) {
+    queries.push(`${dongs[0]} 명소`);
+    queries.push(`${dongs[0]} 거리`);
+  }
+
+  const allItems = [];
   const diag = [];
-  for (const cat of KAKAO_CATEGORIES) {
-    try {
-      const url = `https://dapi.kakao.com/v2/local/search/category.json?category_group_code=${cat.code}&x=${coords.lng}&y=${coords.lat}&radius=1500&size=15&sort=distance`;
-      const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey}` } });
-      if (!r.ok) {
-        const errText = await r.text().catch(() => "");
-        diag.push(`[${cat.code}] HTTP ${r.status} — ${errText.slice(0, 200)}`);
-        continue;
+  for (const q of queries) {
+    const { error, items } = await naverLocalSearch(q, naverSearch);
+    if (error) { diag.push(`[${q}] ${error}`); continue; }
+    diag.push(`[${q}] ${items.length}건`);
+    for (const it of items) {
+      let distance = 9999;
+      if (info.coords && it.mapx && it.mapy) {
+        distance = haversineMeters(info.coords.lat, info.coords.lng, it.mapy, it.mapx);
       }
-      const data = await r.json();
-      const docs = data.documents || [];
-      diag.push(`[${cat.code}] ${docs.length}건`);
-      for (const doc of docs) {
-        const name = (doc.place_name || "").trim();
-        if (!name || name.length < 2 || name.length > 15) continue;
-        // 지하철역은 "역" 만 남기기 (예: "범어역 1번출구" → "범어역")
-        let cleanedName = name;
-        if (cat.code === "SW8") {
-          const stationMatch = name.match(/^([가-힣]{1,8}역)/);
-          if (stationMatch) cleanedName = stationMatch[1];
-        }
-        all.push({
-          name: cleanedName,
-          rawName: name,
-          category: cat.label,
-          categoryCode: cat.code,
-          distance: parseInt(doc.distance) || 9999,
-        });
-      }
-    } catch (e) {
-      diag.push(`[${cat.code}] 예외: ${String(e?.message || e)}`);
+      allItems.push({ ...it, distance, fromQuery: q });
     }
   }
   if (onDiag) onDiag(diag);
-  all.sort((a, b) => a.distance - b.distance);
-  const seen = new Set();
-  const out = [];
-  for (const p of all) {
-    const k = p.name.replace(/\s/g, "");
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(p);
-    if (out.length >= 25) break;
+
+  // 인근 동 이름들 모으기 (행정동/법정동 다양화)
+  const extraDongs = new Set();
+  for (const it of allItems) {
+    for (const addr of [it.address, it.roadAddress]) {
+      const parsed = parseAddress(addr);
+      if (parsed.dong && parsed.dong !== city && parsed.dong !== gu) {
+        // 일정 거리 안에 있는 경우만
+        if (it.distance < 2500) extraDongs.add(parsed.dong);
+      }
+    }
   }
-  return out;
+
+  // POI 필터: 매장에서 2km 이내, 매장명 자체 제외, 중복 제거
+  const storeNs = (info.storeName || "").replace(/\s/g, "");
+  const seen = new Set();
+  const filtered = [];
+  for (const it of allItems.sort((a, b) => a.distance - b.distance)) {
+    if (it.distance > 2500) continue;
+    let name = it.name.replace(/\s/g, "");
+    if (name.length < 2 || name.length > 15) continue;
+    if (storeNs && (name.includes(storeNs) || storeNs.includes(name))) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    filtered.push({
+      name: it.name,
+      category: it.category,
+      distance: Math.round(it.distance),
+    });
+    if (filtered.length >= 25) break;
+  }
+
+  return { pois: filtered, extraDongs: [...extraDongs] };
 }
 
-// 카테고리를 사람들이 검색하는 자연어로 매핑
+// ============= Gemini =============
 function naturalizeCategory(cat) {
   if (!cat) return null;
   const c = cat.replace(/\s/g, "");
@@ -259,79 +303,56 @@ function naturalizeCategory(cat) {
   return cat.length <= 4 ? cat : "맛집";
 }
 
-function buildSeeds(info, pois) {
-  const seeds = new Set();
-  const city = info.regions?.city;
-  const gu = info.regions?.gu;
-  const dongs = [info.regions?.hDong, info.regions?.bDong].filter(Boolean);
-  const cat = naturalizeCategory(info.categories[0]);
-  const intents = ["맛집", "술집", "회식"];
-
-  // 1. 도시/구/동 + 카테고리
-  for (const loc of [city, gu, ...dongs].filter(Boolean)) {
-    if (cat) seeds.add(`${loc} ${cat}`);
-    seeds.add(`${loc} 맛집`);
-  }
-  // 2. 도시 + 동 + 카테고리 (광주 동명동 이자카야 같은 패턴)
-  if (city) {
-    for (const d of dongs) {
-      if (cat) seeds.add(`${city} ${d} ${cat}`);
-    }
-  }
-  // 3. POI + 카테고리/맛집
-  const allLandmarks = [...pois.map(p => p.name), ...(info.landmarkBonus || [])];
-  for (const lm of allLandmarks.slice(0, 6)) {
-    if (cat) seeds.add(`${lm} ${cat}`);
-    seeds.add(`${lm} 맛집`);
-  }
-
-  return [...seeds].slice(0, 12);
-}
-
-async function geminiNaturalize(info, pois, geminiKey, excluded) {
+async function geminiNaturalize(info, pois, geminiKey, excluded, allowMenu) {
   const excludedList = excluded && excluded.size > 0 ? [...excluded].slice(0, 150) : null;
-  // 카테고리 일반화 — "요리주점" → "이자카야", "삼겹살" → "고기집/삼겹살집"
-  const categoriesText = JSON.stringify(info.categories);
-  const poiNames = (pois || []).map(p => p.name).concat(info.landmarkBonus || []).slice(0, 25);
+  const poiNames = (pois || []).map(p => p.name).slice(0, 20);
+  const allDongs = [...new Set([...(info.region?.dongs || []), ...(info.extraDongs || [])])];
 
-  const prompt = `당신은 네이버 플레이스에서 사람들이 실제로 검색하는 지역 검색어를 잘 아는 전문가입니다.
+  const baseHeader = `당신은 네이버 플레이스에서 사람들이 실제로 검색하는 지역 검색어를 잘 아는 전문가입니다.
 
 [매장 컨텍스트]
-- 도시: ${info.regions?.city || "(미상)"}
-- 구/군: ${info.regions?.gu || "(미상)"}
-- 행정동: ${info.regions?.hDong || "(미상)"}
-- 법정동: ${info.regions?.bDong || "(미상)"}
-- 그 외 주소 단위: ${JSON.stringify((info.locations || []).filter(l => l !== info.regions?.city && l !== info.regions?.gu))}
-- 매장 카테고리: ${categoriesText}
-- 검증된 주변 명소/지하철역/장소(Kakao API): ${JSON.stringify(poiNames)}
+- 도시: ${info.region?.city || "(미상)"}
+- 구/군: ${info.region?.gu || "(미상)"}
+- 매장이 위치한 동: ${JSON.stringify(info.region?.dongs || [])}
+- 인근 동 (Naver API로 확인): ${JSON.stringify(info.extraDongs || [])}
+- 매장 카테고리: ${JSON.stringify(info.categories)}
+- 검증된 주변 명소/지하철역/장소(Naver API): ${JSON.stringify(poiNames)}
+${allowMenu ? `- 매장 메뉴(폴백용): ${JSON.stringify(info.menus.slice(0, 10))}` : ""}`;
 
-[당신의 임무]
-실제 사람이 네이버 모바일에서 "어디 가까운 데 ○○ 어디 좋을까" 하고 검색할 법한 자연스러운 키워드 40개 생성.
-
-[필수 규칙]
-1. 형식은 다음 패턴 중 하나여야 함:
-   - {도시명} {카테고리}        (예: 광주 이자카야)
-   - {도시명} {동/구} {카테고리}  (예: 광주 동명동 이자카야)
-   - {동/구} {카테고리}          (예: 동명동 이자카야)
-   - {명소/역} {카테고리}        (예: 문화전당역 이자카야)
-   - {명소/역} 맛집/술집/회식    (예: 광주예술의거리 술집)
-   - {도시명} {명소} {카테고리}   (예: 광주 예술의거리 이자카야)
-2. 카테고리는 일반 사람이 쓰는 단어로 자연화:
-   - "요리주점" → "이자카야", "술집", "퓨전요리"
-   - "삼겹살" → "삼겹살", "고기집"
-   - 카테고리에 매장 메뉴를 끼워넣지 마세요. (X "동구 오렌지치킨 저녁")
-3. 행정동(${info.regions?.hDong || ""})과 법정동(${info.regions?.bDong || ""})이 다르면 둘 다 사용하세요. 사람들은 인지도 높은 쪽을 검색합니다.
-4. 명소/역 이름은 위 [검증된 목록]에만 있는 것만 쓰세요. 새로 만들지 마세요.
+  const naturalRules = `[필수 규칙]
+1. 형식은 다음 중 하나:
+   - {도시명} {카테고리}                (예: 광주 이자카야)
+   - {도시명} {동/구} {카테고리}         (예: 광주 동명동 이자카야)
+   - {동/구} {카테고리}                  (예: 동명동 이자카야)
+   - {명소/역} {카테고리}                (예: 문화전당역 이자카야)
+   - {명소/역} 맛집/술집/회식            (예: 광주예술의거리 술집)
+   - {도시명} {명소} {카테고리}           (예: 광주 예술의거리 이자카야)
+2. 카테고리는 일반 사람이 쓰는 단어로 자연화: "요리주점" → "이자카야"/"술집"
+3. 매장이 위치한 동 + 인근 동을 모두 활용. 사람들은 인지도 높은 쪽을 검색.
+4. 명소/역 이름은 위 [검증된 목록]에만 있는 것만. 새로 만들지 마세요.
 5. 매장명(${info.storeName}) 자체는 포함 금지.
-6. 메뉴명을 조합어로 쓰지 마세요. (특히 외국어/낯선 메뉴는 검색량 0)
+6. 메뉴명을 조합어로 쓰지 마세요.
 7. JSON 배열만 응답.
-${excludedList ? `8. 다음 키워드는 이미 시도했으니 제외: ${JSON.stringify(excludedList.slice(0, 80))}` : ""}
 
 [좋은 예시]
-["광주 이자카야", "광주 동명동 이자카야", "동명동 술집", "문화전당역 이자카야", "광주 예술의거리 술집", "동구 이자카야", "광주 동구 술집"]
+["광주 이자카야", "광주 동명동 이자카야", "동명동 술집", "문화전당역 이자카야", "광주 예술의거리 술집"]
 
-[나쁜 예시 — 절대 만들지 마세요]
-["동구 오렌지치킨 저녁", "장동 명란 오믈렛 맛집", "광주 스부타 점심"]`;
+[나쁜 예시]
+["동구 오렌지치킨 저녁", "장동 명란 오믈렛 맛집"]`;
+
+  const menuRules = `[필수 규칙 — 메뉴 폴백 모드]
+1차 라운드에서 자연 키워드로 10개 못 채웠습니다. 메뉴를 활용한 추가 조합 필요.
+1. 패턴: {동/구/도시} {대표메뉴}, {명소/역} {대표메뉴}, {도시} {대표메뉴} 맛집
+2. 대중적인 메뉴명만 사용 (삼겹살, 파스타, 스시, 라멘 등). 외국어/생소한 메뉴 제외.
+3. 매장명 포함 금지. JSON 배열만 응답.`;
+
+  const prompt = `${baseHeader}
+
+[당신의 임무]
+${allowMenu ? "메뉴를 결합한 추가 키워드 30개 생성." : "실제 사람이 검색할 법한 자연스러운 키워드 40개 생성."}
+
+${allowMenu ? menuRules : naturalRules}
+${excludedList ? `\n[중복 제외] 다음 키워드는 이미 시도했으니 제외: ${JSON.stringify(excludedList.slice(0, 80))}` : ""}`;
 
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), 18000);
@@ -352,9 +373,7 @@ ${excludedList ? `8. 다음 키워드는 이미 시도했으니 제외: ${JSON.s
         signal: ctrl.signal,
       }
     );
-  } finally {
-    clearTimeout(tid);
-  }
+  } finally { clearTimeout(tid); }
   if (!r.ok) throw new Error("Gemini: " + (await r.text()));
   const data = await r.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
@@ -378,9 +397,30 @@ ${excludedList ? `8. 다음 키워드는 이미 시도했으니 제외: ${JSON.s
   return out;
 }
 
+// ============= 네이버 검색광고 keywordstool =============
+function buildSeeds(info, pois) {
+  const seeds = new Set();
+  const city = info.region?.city;
+  const gu = info.region?.gu;
+  const dongs = [...(info.region?.dongs || []), ...(info.extraDongs || [])];
+  const cat = naturalizeCategory(info.categories[0]);
+
+  for (const loc of [city, gu, ...dongs].filter(Boolean)) {
+    if (cat) seeds.add(`${loc} ${cat}`);
+    seeds.add(`${loc} 맛집`);
+  }
+  if (city) {
+    for (const d of dongs) if (cat) seeds.add(`${city} ${d} ${cat}`);
+  }
+  for (const p of (pois || []).slice(0, 6)) {
+    if (cat) seeds.add(`${p.name} ${cat}`);
+    seeds.add(`${p.name} 맛집`);
+  }
+  return [...seeds].slice(0, 12);
+}
+
 function makeAdSignature(timestamp, method, uri, secret) {
-  const message = `${timestamp}.${method}.${uri}`;
-  return crypto.createHmac("sha256", secret).update(message).digest("base64");
+  return crypto.createHmac("sha256", secret).update(`${timestamp}.${method}.${uri}`).digest("base64");
 }
 
 async function fetchKeywordVolumes(seedKeywords, naverAd, onDiag) {
@@ -402,14 +442,10 @@ async function fetchKeywordVolumes(seedKeywords, naverAd, onDiag) {
           "X-Signature": sig,
         },
       });
-      if (!r.ok) {
-        const errText = await r.text().catch(() => "");
-        diag.push(`HTTP ${r.status} — ${errText.slice(0, 300)}`);
-        continue;
-      }
+      if (!r.ok) { diag.push(`HTTP ${r.status} — ${(await r.text()).slice(0, 200)}`); continue; }
       const data = await r.json();
       const list = data.keywordList || [];
-      diag.push(`chunk ${i/5+1}: ${list.length}건`);
+      diag.push(`chunk ${Math.floor(i/5)+1}: ${list.length}건`);
       for (const row of list) {
         const kw = (row.relKeyword || "").trim();
         if (!kw) continue;
@@ -417,14 +453,13 @@ async function fetchKeywordVolumes(seedKeywords, naverAd, onDiag) {
         const mobile = parseInt(String(row.monthlyMobileQcCnt).replace(/[<>,\s]/g, ""), 10) || 0;
         acc.set(kw, { pc, mobile, total: pc + mobile });
       }
-    } catch (e) {
-      diag.push(`예외: ${String(e?.message || e)}`);
-    }
+    } catch (e) { diag.push(`예외: ${String(e?.message || e)}`); }
   }
   if (onDiag) onDiag(diag);
   return acc;
 }
 
+// ============= 5위 추적 =============
 async function checkRanking(placeId, keyword) {
   const url = `https://m.search.naver.com/search.naver?sm=mtb_hty.top&where=m&query=${encodeURIComponent(keyword)}`;
   try {
@@ -441,7 +476,6 @@ async function checkRanking(placeId, keyword) {
       const pid = m[1];
       if (seen.has(pid)) continue;
       seen.add(pid);
-
       const linkPos = m.index;
       const ctxStart = Math.max(0, linkPos - 3000);
       const before = html.substring(ctxStart, linkPos);
@@ -453,24 +487,20 @@ async function checkRanking(placeId, keyword) {
       const liStop = liEnd >= 0 ? afterStart + liEnd : afterStart + 500;
       const block = html.substring(liStart, liStop);
       const isAd = />광고<\/(?:span|em|div|i|strong)>/i.test(block);
-
       if (isAd) {
         if (pid === String(placeId)) return { status: "광고", rank: null };
         continue;
       }
       organicRank++;
       if (pid === String(placeId)) {
-        return organicRank <= 5
-          ? { status: "상위노출", rank: organicRank }
-          : { status: "순위밖", rank: null };
+        return organicRank <= 5 ? { status: "상위노출", rank: organicRank } : { status: "순위밖", rank: null };
       }
     }
     return { status: "순위밖", rank: null };
-  } catch {
-    return { status: "에러", rank: null };
-  }
+  } catch { return { status: "에러", rank: null }; }
 }
 
+// ============= 핸들러 =============
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   const { url } = req.body || {};
@@ -479,7 +509,10 @@ export default async function handler(req, res) {
   const geminiKey = process.env.GEMINI_API_KEY;
   if (!geminiKey) return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
 
-  const kakaoKey = process.env.KAKAO_REST_API_KEY;
+  const naverSearch = {
+    clientId: process.env.NAVER_SEARCH_CLIENT_ID,
+    clientSecret: process.env.NAVER_SEARCH_CLIENT_SECRET,
+  };
   const naverAd = {
     apiKey: process.env.NAVER_AD_API_KEY,
     secretKey: process.env.NAVER_AD_SECRET_KEY,
@@ -498,114 +531,76 @@ export default async function handler(req, res) {
   const SAFETY_MS = 6000;
 
   try {
-    // 1. 크롤
     send({ type: "stage_start", stage: "crawl", message: "플레이스 페이지 크롤링 중..." });
     const info = await getStoreInfo(url);
     if (!info.storeName) {
       send({ type: "error", message: "매장 정보를 가져올 수 없습니다." });
       return res.end();
     }
-    send({ type: "stage_done", stage: "crawl", info: { ...info, landmarks: [], placeKeywords: [] } });
+    send({ type: "stage_done", stage: "crawl", info });
 
-    // 2. 카카오 로컬 API로 진짜 POI + 행정구역 정보 확보
+    // 2. 네이버 지역검색으로 주변 POI + 인근 동 발견
     let pois = [];
-    let regions = { city: null, gu: null, hDong: null, bDong: null, raw: [] };
-    let landmarkBonus = []; // 키워드 검색으로 찾은 추가 명소
-    if (kakaoKey && info.coords) {
-      send({ type: "stage_start", stage: "poi", message: `Kakao Local API로 반경 1.5km 주변 명소 조회 중...` });
-
-      // 2a. 행정동 + 법정동 확보 (장동 / 동명동 같이 다른 동 이름)
-      regions = await getKakaoRegions(info.coords, kakaoKey);
-      send({ type: "info", message: `Kakao 지역: ${regions.city || "?"} ${regions.gu || "?"} (행정동: ${regions.hDong || "?"} · 법정동: ${regions.bDong || "?"})` });
-
-      // 2b. 카테고리 검색 (역/명소/공공기관/학교/문화시설)
-      pois = await getKakaoNearbyPOIs(info.coords, kakaoKey, (diag) => {
-        for (const d of diag) send({ type: "info", message: `Kakao 진단: ${d}` });
+    let extraDongs = [];
+    if (naverSearch.clientId) {
+      send({ type: "stage_start", stage: "poi", message: "네이버 지역검색 Open API로 주변 명소 조회 중..." });
+      const result = await getNearbyPOIs(info, naverSearch, (diag) => {
+        for (const d of diag) send({ type: "info", message: `Naver Local 진단: ${d}` });
       });
-
-      // 2c. 키워드 검색으로 잘 알려진 명소·거리·광장 추가 발견
-      const queries = ["거리", "광장", "공원", "역"];
-      for (const q of queries) {
-        const found = await getKakaoKeywordLandmarks(info.coords, kakaoKey, q);
-        for (const name of found) {
-          if (landmarkBonus.includes(name)) continue;
-          if (pois.some(p => p.name === name)) continue;
-          landmarkBonus.push(name);
-        }
-      }
-      send({ type: "info", message: `Kakao 키워드 검색 명소: ${landmarkBonus.slice(0, 6).join(", ")}${landmarkBonus.length > 6 ? " ..." : ""}` });
-
-      send({ type: "stage_done", stage: "poi", pois, regions, landmarkBonus });
+      pois = result.pois;
+      extraDongs = result.extraDongs;
+      info.extraDongs = extraDongs;
+      send({ type: "info", message: `인근 동 발견: ${extraDongs.join(", ") || "(없음)"}` });
+      send({ type: "stage_done", stage: "poi", pois, regions: { city: info.region.city, gu: info.region.gu, hDong: info.region.dongs[0] || null, bDong: info.region.dongs[1] || null }, landmarkBonus: extraDongs });
     } else {
-      send({ type: "info", message: kakaoKey ? "좌표 추출 실패 — POI 조회 건너뜀" : "KAKAO_REST_API_KEY 없음 — POI 조회 건너뜀" });
+      send({ type: "info", message: "NAVER_SEARCH_CLIENT_ID 없음 — POI 조회 건너뜀" });
     }
 
-    // 2d. 매장 정보에 카카오 지역 데이터 병합 (행정동/법정동 둘 다 활용)
-    const allLocations = new Set(info.locations);
-    if (regions.city) allLocations.add(regions.city);
-    if (regions.gu) allLocations.add(regions.gu);
-    if (regions.hDong) allLocations.add(regions.hDong);
-    if (regions.bDong) allLocations.add(regions.bDong);
-    info.locations = [...allLocations];
-    info.regions = regions;
-    info.landmarkBonus = landmarkBonus.slice(0, 10);
-
-    // 3. Gemini로 자연 조합 생성
-    send({ type: "stage_start", stage: "keywords", message: "Gemini로 자연스러운 키워드 조합 생성 중..." });
+    // 3. Gemini 1차 — 메뉴 없이 자연스러운 지역 키워드
+    send({ type: "stage_start", stage: "keywords", message: "Gemini로 자연스러운 지역 키워드 조합 생성 (1차)..." });
     let geminiPool;
     try {
-      geminiPool = await geminiNaturalize(info, pois, geminiKey);
+      geminiPool = await geminiNaturalize(info, pois, geminiKey, null, false);
     } catch (e) {
       send({ type: "error", message: "Gemini 호출 실패: " + (e?.message || e) });
       return res.end();
     }
     send({ type: "stage_done", stage: "keywords", poolSize: geminiPool.length });
 
-    // 4. 네이버 검색광고 keywordstool로 월간 검색량 가져오기 (시드 기반)
+    // 4. 검색광고 keywordstool 검색량 검증
     let volumeMap = null;
     if (naverAd.apiKey && naverAd.secretKey && naverAd.customerId) {
-      send({ type: "stage_start", stage: "volume", message: "네이버 검색광고 API로 월간 검색량 조회 중..." });
+      send({ type: "stage_start", stage: "volume", message: "네이버 검색광고로 월간 검색량 조회 중..." });
       const seeds = buildSeeds(info, pois);
       send({ type: "info", message: `검색량 시드: ${seeds.slice(0, 6).join(", ")}${seeds.length > 6 ? " ..." : ""}` });
       volumeMap = await fetchKeywordVolumes(seeds, naverAd, (diag) => {
         for (const d of diag) send({ type: "info", message: `검색광고 진단: ${d}` });
       });
-      if (volumeMap) {
-        send({ type: "stage_done", stage: "volume", message: `${volumeMap.size}개 키워드의 월간 검색량 확보` });
-      } else {
-        send({ type: "info", message: "검색광고 API 응답 실패 — 검색량 검증 건너뜀" });
-      }
+      if (volumeMap) send({ type: "stage_done", stage: "volume", message: `${volumeMap.size}개 키워드의 월간 검색량 확보` });
     } else {
       send({ type: "info", message: "NAVER_AD_* 환경변수 없음 — 검색량 검증 건너뜀" });
     }
 
-    // 5. 풀 합치기 — Gemini 후보 + 검색광고가 발견한 고검색량 키워드
+    // 5. 풀 합치기
     let pool;
     const cleanStore = (info.storeName || "").replace(/\s+/g, "");
     if (volumeMap && volumeMap.size > 0) {
-      const candidates = new Map(); // keyword → volume
-      // Gemini 후보: volumeMap에서 검색량 조회 (없으면 0)
+      const candidates = new Map();
       for (const kw of geminiPool) {
         const v = volumeMap.get(kw) || volumeMap.get(kw.replace(/\s/g, "")) || { total: 0, mobile: 0 };
         candidates.set(kw, v.mobile || v.total || 0);
       }
-      // 검색광고가 직접 던져준 연관키워드 중에서도 매장과 관련된 것만 추가
-      const locWords = info.locations.concat(pois.map(p => p.name)).map(s => s.replace(/\s/g, ""));
+      const locWords = [...info.locations, ...pois.map(p => p.name), ...extraDongs].map(s => s.replace(/\s/g, ""));
       for (const [kw, v] of volumeMap.entries()) {
         if (candidates.has(kw)) continue;
         const ns = kw.replace(/\s/g, "");
         if (ns.length < 4 || ns.length > 25) continue;
         if (cleanStore && ns.includes(cleanStore)) continue;
-        // 매장 지역/POI 중 하나라도 포함되어야 함
         if (!locWords.some(w => w && ns.includes(w))) continue;
         if ((v.mobile || 0) < 30) continue;
         candidates.set(kw, v.mobile || v.total || 0);
       }
-      // 정렬: 검색량 내림차순, 최대 60개
-      pool = [...candidates.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 60)
-        .map(([kw]) => kw);
+      pool = [...candidates.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([kw]) => kw);
       send({ type: "info", message: `검색량 기준 정렬된 키워드 ${pool.length}개로 추적 시작` });
     } else {
       pool = geminiPool.slice(0, 50);
@@ -632,33 +627,30 @@ export default async function handler(req, res) {
       lastRound = round;
       const elapsed = Date.now() - start;
       if (elapsed > TIMEOUT_MS - SAFETY_MS) {
-        send({ type: "info", message: `시간 한계로 추가 검색 중단 (경과 ${Math.round(elapsed/1000)}초)` });
+        send({ type: "info", message: `시간 한계 (${Math.round(elapsed/1000)}초)` });
         break;
       }
-
       if (round > 0) {
-        send({ type: "retry_start", round, message: `재시도 ${round}/${REPEAT_LIMIT - 1}회차 — 새 키워드 생성 중... (현재 ${found.length}/10)` });
+        send({ type: "retry_start", round, message: `재시도 ${round}/${REPEAT_LIMIT - 1}회차 — 메뉴 폴백 모드로 새 조합 생성 중... (현재 ${found.length}/10)` });
         try {
-          pool = await geminiNaturalize(info, pois, geminiKey, searchedSet);
+          pool = await geminiNaturalize(info, pois, geminiKey, searchedSet, true);
         } catch (e) {
-          send({ type: "info", message: `재시도 ${round} — Gemini 실패: ${String(e?.message || e)}` });
+          send({ type: "info", message: `재시도 ${round} 실패: ${String(e?.message || e)}` });
           break;
         }
         totalPoolSize += pool.length;
       }
-
       const newKws = pool.filter(kw => !searchedSet.has(kw));
       if (newKws.length === 0) {
         send({ type: "info", message: "더 이상 새 키워드가 없습니다." });
         break;
       }
       if (round > 0) {
-        send({ type: "retry_pool", round, poolSize: newKws.length, message: `재시도 ${round} — 새 키워드 ${newKws.length}개로 추가 검색` });
+        send({ type: "retry_pool", round, poolSize: newKws.length, message: `재시도 ${round} — 새 키워드 ${newKws.length}개` });
       }
-
       for (let i = 0; i < newKws.length && found.length < TARGET; i += BATCH) {
         if (Date.now() - start > TIMEOUT_MS - SAFETY_MS) {
-          send({ type: "info", message: "검색 시간 한계 — 결과 정리 중" });
+          send({ type: "info", message: "검색 시간 한계 — 정리 중" });
           break;
         }
         const batch = newKws.slice(i, i + BATCH);
@@ -701,6 +693,8 @@ export default async function handler(req, res) {
       meta: {
         placeId: info.placeId,
         coords: info.coords,
+        region: info.region,
+        extraDongs,
         locations: info.locations,
         categories: info.categories,
         menus: info.menus,
@@ -716,7 +710,7 @@ export default async function handler(req, res) {
       `;
     } catch (e) {
       console.error("DB insert failed", e);
-      send({ type: "info", message: "DB 저장 실패 (결과는 화면에 표시됨)" });
+      send({ type: "info", message: "DB 저장 실패" });
     }
 
     send({
