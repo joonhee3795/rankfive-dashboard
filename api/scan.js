@@ -153,6 +153,43 @@ const KAKAO_CATEGORIES = [
   { code: "CT1", label: "문화시설" },
 ];
 
+async function getKakaoRegions(coords, kakaoKey) {
+  // coord2regioncode — 좌표 → 행정동(H) + 법정동(B) 둘 다 반환
+  if (!coords || !kakaoKey) return { city: null, gu: null, hDong: null, bDong: null, raw: [] };
+  try {
+    const url = `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${coords.lng}&y=${coords.lat}`;
+    const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey}` } });
+    if (!r.ok) return { city: null, gu: null, hDong: null, bDong: null, raw: [] };
+    const data = await r.json();
+    const docs = data.documents || [];
+    const out = { city: null, gu: null, hDong: null, bDong: null, raw: [] };
+    for (const d of docs) {
+      out.raw.push({ type: d.region_type, name: d.region_3depth_name, code: d.code });
+      if (!out.city) out.city = (d.region_1depth_name || "").replace("광역시", "").replace("특별시", "").replace("특별자치시", "").replace("특별자치도", "");
+      if (!out.gu) out.gu = d.region_2depth_name;
+      if (d.region_type === "H") out.hDong = d.region_3depth_name;
+      if (d.region_type === "B") out.bDong = d.region_3depth_name;
+    }
+    return out;
+  } catch {
+    return { city: null, gu: null, hDong: null, bDong: null, raw: [] };
+  }
+}
+
+async function getKakaoKeywordLandmarks(coords, kakaoKey, query) {
+  // 좌표 기준 키워드 검색 — 잘 알려진 명소(예술의거리, 거리, 광장) 찾기
+  if (!coords || !kakaoKey) return [];
+  try {
+    const url = `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&x=${coords.lng}&y=${coords.lat}&radius=2000&size=10&sort=accuracy`;
+    const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey}` } });
+    if (!r.ok) return [];
+    const data = await r.json();
+    return (data.documents || [])
+      .map(d => (d.place_name || "").trim())
+      .filter(n => n.length >= 2 && n.length <= 15);
+  } catch { return []; }
+}
+
 async function getKakaoNearbyPOIs(coords, kakaoKey, onDiag) {
   if (!coords || !kakaoKey) return [];
   const all = [];
@@ -204,29 +241,48 @@ async function getKakaoNearbyPOIs(coords, kakaoKey, onDiag) {
   return out;
 }
 
+// 카테고리를 사람들이 검색하는 자연어로 매핑
+function naturalizeCategory(cat) {
+  if (!cat) return null;
+  const c = cat.replace(/\s/g, "");
+  if (c.includes("요리주점") || c.includes("일본식") || c.includes("이자카야")) return "이자카야";
+  if (c.includes("삼겹살") || c.includes("돼지")) return "삼겹살";
+  if (c.includes("갈비") || c.includes("소고기")) return "고기집";
+  if (c.includes("한식")) return "맛집";
+  if (c.includes("카페") || c.includes("커피")) return "카페";
+  if (c.includes("미용") || c.includes("헤어")) return "미용실";
+  if (c.includes("스시") || c.includes("초밥")) return "스시";
+  if (c.includes("파스타") || c.includes("이탈리")) return "파스타";
+  if (c.includes("중식") || c.includes("짜장")) return "중식당";
+  if (c.includes("분식") || c.includes("떡볶이")) return "분식";
+  if (c.includes("치킨")) return "치킨";
+  return cat.length <= 4 ? cat : "맛집";
+}
+
 function buildSeeds(info, pois) {
   const seeds = new Set();
-  const locDong = info.locations.find(l => /동$/.test(l));
-  const locGu = info.locations.find(l => /(?:구|군)$/.test(l));
-  const primaryCat = info.categories[0] || null;
+  const city = info.regions?.city;
+  const gu = info.regions?.gu;
+  const dongs = [info.regions?.hDong, info.regions?.bDong].filter(Boolean);
+  const cat = naturalizeCategory(info.categories[0]);
+  const intents = ["맛집", "술집", "회식"];
 
-  // 1. 지역 + 업종
-  for (const loc of info.locations.slice(0, 3)) {
-    if (primaryCat) seeds.add(`${loc} ${primaryCat}`);
+  // 1. 도시/구/동 + 카테고리
+  for (const loc of [city, gu, ...dongs].filter(Boolean)) {
+    if (cat) seeds.add(`${loc} ${cat}`);
     seeds.add(`${loc} 맛집`);
   }
-  // 2. POI + 의도어
-  const intents = ["맛집", "회식", "데이트", "점심", "저녁"];
-  for (const poi of pois.slice(0, 6)) {
-    for (const intent of intents.slice(0, 3)) {
-      seeds.add(`${poi.name} ${intent}`);
+  // 2. 도시 + 동 + 카테고리 (광주 동명동 이자카야 같은 패턴)
+  if (city) {
+    for (const d of dongs) {
+      if (cat) seeds.add(`${city} ${d} ${cat}`);
     }
   }
-  // 3. POI + 업종
-  if (primaryCat) {
-    for (const poi of pois.slice(0, 4)) {
-      seeds.add(`${poi.name} ${primaryCat}`);
-    }
+  // 3. POI + 카테고리/맛집
+  const allLandmarks = [...pois.map(p => p.name), ...(info.landmarkBonus || [])];
+  for (const lm of allLandmarks.slice(0, 6)) {
+    if (cat) seeds.add(`${lm} ${cat}`);
+    seeds.add(`${lm} 맛집`);
   }
 
   return [...seeds].slice(0, 12);
@@ -234,23 +290,48 @@ function buildSeeds(info, pois) {
 
 async function geminiNaturalize(info, pois, geminiKey, excluded) {
   const excludedList = excluded && excluded.size > 0 ? [...excluded].slice(0, 150) : null;
-  const prompt = `당신은 대한민국 지역 로컬 마케팅 전문가입니다.
-아래 [확정된 데이터]만 사용해서 자연스러운 검색어 조합 40개를 만드세요.
+  // 카테고리 일반화 — "요리주점" → "이자카야", "삼겹살" → "고기집/삼겹살집"
+  const categoriesText = JSON.stringify(info.categories);
+  const poiNames = (pois || []).map(p => p.name).concat(info.landmarkBonus || []).slice(0, 25);
 
-[확정된 데이터]
-- 매장명: ${info.storeName}
-- 행정구역(반드시 이중 하나만 사용): ${JSON.stringify(info.locations)}
-- 매장 카테고리: ${JSON.stringify(info.categories)}
-- 매장 메뉴: ${JSON.stringify(info.menus)}
-- 주변 실제 POI (Kakao API로 검증된 진짜 명소·역·기관): ${JSON.stringify(pois.map(p => `${p.name}(${p.category})`))}
+  const prompt = `당신은 네이버 플레이스에서 사람들이 실제로 검색하는 지역 검색어를 잘 아는 전문가입니다.
 
-[규칙]
-1. 위 데이터에 없는 새로운 명소·지역·역 이름은 절대 만들지 마세요. 환각 금지.
-2. "지역+메뉴", "지역+카테고리", "POI+의도어(맛집/회식/점심/저녁/데이트)", "POI+메뉴" 형식.
-3. 매장명(${info.storeName}) 자체를 포함하지 마세요.
-4. 무게(g/인분/ml) 및 가격 정보 제거.
-5. JSON 배열만 응답.
-${excludedList ? `6. 다음은 이미 검색했으니 제외: ${JSON.stringify(excludedList)}` : ""}`;
+[매장 컨텍스트]
+- 도시: ${info.regions?.city || "(미상)"}
+- 구/군: ${info.regions?.gu || "(미상)"}
+- 행정동: ${info.regions?.hDong || "(미상)"}
+- 법정동: ${info.regions?.bDong || "(미상)"}
+- 그 외 주소 단위: ${JSON.stringify((info.locations || []).filter(l => l !== info.regions?.city && l !== info.regions?.gu))}
+- 매장 카테고리: ${categoriesText}
+- 검증된 주변 명소/지하철역/장소(Kakao API): ${JSON.stringify(poiNames)}
+
+[당신의 임무]
+실제 사람이 네이버 모바일에서 "어디 가까운 데 ○○ 어디 좋을까" 하고 검색할 법한 자연스러운 키워드 40개 생성.
+
+[필수 규칙]
+1. 형식은 다음 패턴 중 하나여야 함:
+   - {도시명} {카테고리}        (예: 광주 이자카야)
+   - {도시명} {동/구} {카테고리}  (예: 광주 동명동 이자카야)
+   - {동/구} {카테고리}          (예: 동명동 이자카야)
+   - {명소/역} {카테고리}        (예: 문화전당역 이자카야)
+   - {명소/역} 맛집/술집/회식    (예: 광주예술의거리 술집)
+   - {도시명} {명소} {카테고리}   (예: 광주 예술의거리 이자카야)
+2. 카테고리는 일반 사람이 쓰는 단어로 자연화:
+   - "요리주점" → "이자카야", "술집", "퓨전요리"
+   - "삼겹살" → "삼겹살", "고기집"
+   - 카테고리에 매장 메뉴를 끼워넣지 마세요. (X "동구 오렌지치킨 저녁")
+3. 행정동(${info.regions?.hDong || ""})과 법정동(${info.regions?.bDong || ""})이 다르면 둘 다 사용하세요. 사람들은 인지도 높은 쪽을 검색합니다.
+4. 명소/역 이름은 위 [검증된 목록]에만 있는 것만 쓰세요. 새로 만들지 마세요.
+5. 매장명(${info.storeName}) 자체는 포함 금지.
+6. 메뉴명을 조합어로 쓰지 마세요. (특히 외국어/낯선 메뉴는 검색량 0)
+7. JSON 배열만 응답.
+${excludedList ? `8. 다음 키워드는 이미 시도했으니 제외: ${JSON.stringify(excludedList.slice(0, 80))}` : ""}
+
+[좋은 예시]
+["광주 이자카야", "광주 동명동 이자카야", "동명동 술집", "문화전당역 이자카야", "광주 예술의거리 술집", "동구 이자카야", "광주 동구 술집"]
+
+[나쁜 예시 — 절대 만들지 마세요]
+["동구 오렌지치킨 저녁", "장동 명란 오믈렛 맛집", "광주 스부타 점심"]`;
 
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), 18000);
@@ -426,17 +507,48 @@ export default async function handler(req, res) {
     }
     send({ type: "stage_done", stage: "crawl", info: { ...info, landmarks: [], placeKeywords: [] } });
 
-    // 2. 카카오 로컬 API로 진짜 POI 확보
+    // 2. 카카오 로컬 API로 진짜 POI + 행정구역 정보 확보
     let pois = [];
+    let regions = { city: null, gu: null, hDong: null, bDong: null, raw: [] };
+    let landmarkBonus = []; // 키워드 검색으로 찾은 추가 명소
     if (kakaoKey && info.coords) {
       send({ type: "stage_start", stage: "poi", message: `Kakao Local API로 반경 1.5km 주변 명소 조회 중...` });
+
+      // 2a. 행정동 + 법정동 확보 (장동 / 동명동 같이 다른 동 이름)
+      regions = await getKakaoRegions(info.coords, kakaoKey);
+      send({ type: "info", message: `Kakao 지역: ${regions.city || "?"} ${regions.gu || "?"} (행정동: ${regions.hDong || "?"} · 법정동: ${regions.bDong || "?"})` });
+
+      // 2b. 카테고리 검색 (역/명소/공공기관/학교/문화시설)
       pois = await getKakaoNearbyPOIs(info.coords, kakaoKey, (diag) => {
         for (const d of diag) send({ type: "info", message: `Kakao 진단: ${d}` });
       });
-      send({ type: "stage_done", stage: "poi", pois });
+
+      // 2c. 키워드 검색으로 잘 알려진 명소·거리·광장 추가 발견
+      const queries = ["거리", "광장", "공원", "역"];
+      for (const q of queries) {
+        const found = await getKakaoKeywordLandmarks(info.coords, kakaoKey, q);
+        for (const name of found) {
+          if (landmarkBonus.includes(name)) continue;
+          if (pois.some(p => p.name === name)) continue;
+          landmarkBonus.push(name);
+        }
+      }
+      send({ type: "info", message: `Kakao 키워드 검색 명소: ${landmarkBonus.slice(0, 6).join(", ")}${landmarkBonus.length > 6 ? " ..." : ""}` });
+
+      send({ type: "stage_done", stage: "poi", pois, regions, landmarkBonus });
     } else {
       send({ type: "info", message: kakaoKey ? "좌표 추출 실패 — POI 조회 건너뜀" : "KAKAO_REST_API_KEY 없음 — POI 조회 건너뜀" });
     }
+
+    // 2d. 매장 정보에 카카오 지역 데이터 병합 (행정동/법정동 둘 다 활용)
+    const allLocations = new Set(info.locations);
+    if (regions.city) allLocations.add(regions.city);
+    if (regions.gu) allLocations.add(regions.gu);
+    if (regions.hDong) allLocations.add(regions.hDong);
+    if (regions.bDong) allLocations.add(regions.bDong);
+    info.locations = [...allLocations];
+    info.regions = regions;
+    info.landmarkBonus = landmarkBonus.slice(0, 10);
 
     // 3. Gemini로 자연 조합 생성
     send({ type: "stage_start", stage: "keywords", message: "Gemini로 자연스러운 키워드 조합 생성 중..." });
