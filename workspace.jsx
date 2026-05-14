@@ -699,6 +699,8 @@ const ResultStat = ({ label, value, suffix, tone }) => (
 const ScanProgress = ({ url, goto, openResult }) => {
   const [stage, setStage] = useState("crawl");
   const [info, setInfo] = useState(null);
+  const [pois, setPois] = useState([]);
+  const [volumeMsg, setVolumeMsg] = useState(null);
   const [poolSize, setPoolSize] = useState(0);
   const [scannedCount, setScannedCount] = useState(0);
   const [foundCount, setFoundCount] = useState(0);
@@ -765,10 +767,17 @@ const ScanProgress = ({ url, goto, openResult }) => {
             } else if (ev.type === "stage_done") {
               if (ev.stage === "crawl" && ev.info) {
                 setInfo(ev.info);
-                pushLog({ kind: "ok", text: `매장: ${ev.info.storeName} (ID: ${ev.info.placeId}) — 지역 ${ev.info.locations?.length||0} · 메뉴 ${ev.info.menus?.length||0} · 명소 ${ev.info.landmarks?.length||0}` });
+                const c = ev.info.coords;
+                pushLog({ kind: "ok", text: `매장: ${ev.info.storeName} (ID: ${ev.info.placeId})${c ? ` · 좌표 ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}` : ""} — 지역 ${ev.info.locations?.length||0} · 메뉴 ${ev.info.menus?.length||0}` });
+              } else if (ev.stage === "poi" && Array.isArray(ev.pois)) {
+                setPois(ev.pois);
+                pushLog({ kind: "ok", text: `Kakao Local — 주변 POI ${ev.pois.length}개 확보: ${ev.pois.slice(0,5).map(p => p.name).join(", ")}${ev.pois.length > 5 ? " ..." : ""}` });
               } else if (ev.stage === "keywords") {
                 setPoolSize(ev.poolSize);
                 pushLog({ kind: "ok", text: `Gemini가 ${ev.poolSize}개의 키워드 생성 완료` });
+              } else if (ev.stage === "volume") {
+                setVolumeMsg(ev.message);
+                pushLog({ kind: "ok", text: ev.message });
               }
             } else if (ev.type === "check_progress") {
               setScannedCount(ev.scannedCount);
@@ -806,16 +815,20 @@ const ScanProgress = ({ url, goto, openResult }) => {
   }, [url, openResult, pushLog]);
 
   const stages = [
-    { id: "crawl",    label: "매장 정보 수집",  sub: "플레이스 HTML 파싱 · 메뉴 · 명소 추출" },
-    { id: "keywords", label: "AI 키워드 추론",  sub: "Gemini 2.5가 50+ 키워드 생성" },
-    { id: "check",    label: "오가닉 순위 추적", sub: "모바일 통합검색 5위 이내 정밀 필터링" },
+    { id: "crawl",    label: "매장 정보 수집",  sub: "플레이스 HTML · 좌표 · 메뉴 추출" },
+    { id: "poi",      label: "주변 POI 조회",   sub: "Kakao Local API로 반경 1.5km 명소" },
+    { id: "keywords", label: "AI 자연 조합",    sub: "확정된 데이터로만 환각 없는 키워드" },
+    { id: "volume",   label: "월간 검색량 검증", sub: "네이버 검색광고 API로 진짜 검색량" },
+    { id: "check",    label: "오가닉 순위 추적", sub: "모바일 통합검색 5위 이내 광고 제외" },
   ];
   const stageIdx = stages.findIndex(s => s.id === stage);
   const overallPct = done ? 100
-    : stage === "crawl" ? 15
-    : stage === "keywords" ? 35
-    : poolSize > 0 ? Math.min(99, 35 + Math.floor((scannedCount / poolSize) * 60))
-    : 35;
+    : stage === "crawl" ? 10
+    : stage === "poi" ? 20
+    : stage === "keywords" ? 30
+    : stage === "volume" ? 40
+    : poolSize > 0 ? Math.min(99, 40 + Math.floor((scannedCount / poolSize) * 55))
+    : 40;
 
   return (
     <div data-screen-label="04 Scan">
@@ -854,15 +867,18 @@ const ScanProgress = ({ url, goto, openResult }) => {
                   </div>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {[...(info.locations||[]), ...(info.landmarks||[])].slice(0, 8).map((x, i) => (
-                    <Tag key={i} tone="outline" icon="pin">{x}</Tag>
+                  {(info.locations||[]).slice(0, 4).map((x, i) => (
+                    <Tag key={`l${i}`} tone="outline" icon="pin">{x}</Tag>
+                  ))}
+                  {pois.slice(0, 5).map((p, i) => (
+                    <Tag key={`p${i}`} tone="green" icon="star">{p.name}</Tag>
                   ))}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 16 }}>
-                  <KpiCell label="지역" value={(info.locations||[]).length} icon="pin"/>
-                  <KpiCell label="메뉴" value={(info.menus||[]).length} icon="list"/>
-                  <KpiCell label="명소" value={(info.landmarks||[]).length} icon="star"/>
-                  <KpiCell label="키워드" value={(info.placeKeywords||[]).length} icon="sparkle"/>
+                  <KpiCell label="지역" value={(info.locations||[]).length}/>
+                  <KpiCell label="메뉴" value={(info.menus||[]).length}/>
+                  <KpiCell label="주변 POI" value={pois.length} highlight={pois.length > 0}/>
+                  <KpiCell label="좌표" value={info.coords ? "확보" : "—"}/>
                 </div>
               </>
             ) : (
