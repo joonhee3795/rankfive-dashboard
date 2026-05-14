@@ -153,16 +153,23 @@ const KAKAO_CATEGORIES = [
   { code: "CT1", label: "문화시설" },
 ];
 
-async function getKakaoNearbyPOIs(coords, kakaoKey) {
+async function getKakaoNearbyPOIs(coords, kakaoKey, onDiag) {
   if (!coords || !kakaoKey) return [];
   const all = [];
+  const diag = [];
   for (const cat of KAKAO_CATEGORIES) {
     try {
       const url = `https://dapi.kakao.com/v2/local/search/category.json?category_group_code=${cat.code}&x=${coords.lng}&y=${coords.lat}&radius=1500&size=15&sort=distance`;
       const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey}` } });
-      if (!r.ok) continue;
+      if (!r.ok) {
+        const errText = await r.text().catch(() => "");
+        diag.push(`[${cat.code}] HTTP ${r.status} — ${errText.slice(0, 200)}`);
+        continue;
+      }
       const data = await r.json();
-      for (const doc of data.documents || []) {
+      const docs = data.documents || [];
+      diag.push(`[${cat.code}] ${docs.length}건`);
+      for (const doc of docs) {
         const name = (doc.place_name || "").trim();
         if (!name || name.length < 2 || name.length > 15) continue;
         // 지하철역은 "역" 만 남기기 (예: "범어역 1번출구" → "범어역")
@@ -179,8 +186,11 @@ async function getKakaoNearbyPOIs(coords, kakaoKey) {
           distance: parseInt(doc.distance) || 9999,
         });
       }
-    } catch {}
+    } catch (e) {
+      diag.push(`[${cat.code}] 예외: ${String(e?.message || e)}`);
+    }
   }
+  if (onDiag) onDiag(diag);
   all.sort((a, b) => a.distance - b.distance);
   const seen = new Set();
   const out = [];
@@ -292,10 +302,10 @@ function makeAdSignature(timestamp, method, uri, secret) {
   return crypto.createHmac("sha256", secret).update(message).digest("base64");
 }
 
-async function fetchKeywordVolumes(seedKeywords, naverAd) {
-  // 검색광고 keywordstool — 시드 5개씩 묶어 호출. 응답은 시드 + 연관 키워드 모두 포함.
+async function fetchKeywordVolumes(seedKeywords, naverAd, onDiag) {
   if (!naverAd?.apiKey || !naverAd?.secretKey || !naverAd?.customerId) return null;
-  const acc = new Map(); // keyword → {mobile, pc}
+  const acc = new Map();
+  const diag = [];
   for (let i = 0; i < seedKeywords.length; i += 5) {
     const chunk = seedKeywords.slice(i, i + 5);
     const uri = "/keywordstool";
@@ -311,17 +321,26 @@ async function fetchKeywordVolumes(seedKeywords, naverAd) {
           "X-Signature": sig,
         },
       });
-      if (!r.ok) continue;
+      if (!r.ok) {
+        const errText = await r.text().catch(() => "");
+        diag.push(`HTTP ${r.status} — ${errText.slice(0, 300)}`);
+        continue;
+      }
       const data = await r.json();
-      for (const row of data.keywordList || []) {
+      const list = data.keywordList || [];
+      diag.push(`chunk ${i/5+1}: ${list.length}건`);
+      for (const row of list) {
         const kw = (row.relKeyword || "").trim();
         if (!kw) continue;
         const pc = parseInt(String(row.monthlyPcQcCnt).replace(/[<>,\s]/g, ""), 10) || 0;
         const mobile = parseInt(String(row.monthlyMobileQcCnt).replace(/[<>,\s]/g, ""), 10) || 0;
         acc.set(kw, { pc, mobile, total: pc + mobile });
       }
-    } catch {}
+    } catch (e) {
+      diag.push(`예외: ${String(e?.message || e)}`);
+    }
   }
+  if (onDiag) onDiag(diag);
   return acc;
 }
 
@@ -411,7 +430,9 @@ export default async function handler(req, res) {
     let pois = [];
     if (kakaoKey && info.coords) {
       send({ type: "stage_start", stage: "poi", message: `Kakao Local API로 반경 1.5km 주변 명소 조회 중...` });
-      pois = await getKakaoNearbyPOIs(info.coords, kakaoKey);
+      pois = await getKakaoNearbyPOIs(info.coords, kakaoKey, (diag) => {
+        for (const d of diag) send({ type: "info", message: `Kakao 진단: ${d}` });
+      });
       send({ type: "stage_done", stage: "poi", pois });
     } else {
       send({ type: "info", message: kakaoKey ? "좌표 추출 실패 — POI 조회 건너뜀" : "KAKAO_REST_API_KEY 없음 — POI 조회 건너뜀" });
@@ -433,7 +454,10 @@ export default async function handler(req, res) {
     if (naverAd.apiKey && naverAd.secretKey && naverAd.customerId) {
       send({ type: "stage_start", stage: "volume", message: "네이버 검색광고 API로 월간 검색량 조회 중..." });
       const seeds = buildSeeds(info, pois);
-      volumeMap = await fetchKeywordVolumes(seeds, naverAd);
+      send({ type: "info", message: `검색량 시드: ${seeds.slice(0, 6).join(", ")}${seeds.length > 6 ? " ..." : ""}` });
+      volumeMap = await fetchKeywordVolumes(seeds, naverAd, (diag) => {
+        for (const d of diag) send({ type: "info", message: `검색광고 진단: ${d}` });
+      });
       if (volumeMap) {
         send({ type: "stage_done", stage: "volume", message: `${volumeMap.size}개 키워드의 월간 검색량 확보` });
       } else {
