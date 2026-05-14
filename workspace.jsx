@@ -766,8 +766,9 @@ const ScanProgress = ({ url, goto, openResult }) => {
               setPoolSize(prev => prev + (ev.poolSize || 0));
               pushLog({ kind: "ok", text: ev.message || `재시도 ${ev.round} — 새 키워드 ${ev.poolSize}개 추가` });
             } else if (ev.type === "info") {
-              if (ev.message?.startsWith("Kakao 진단:")) {
-                setKakaoDiag(prev => [...prev, ev.message.replace("Kakao 진단:", "").trim()]);
+              if (ev.message?.startsWith("Naver Local 진단:") || ev.message?.startsWith("Kakao 진단:")) {
+                const stripped = ev.message.replace(/^(Naver Local 진단:|Kakao 진단:)/, "").trim();
+                setKakaoDiag(prev => [...prev, stripped]);
               } else if (ev.message?.startsWith("검색광고 진단:")) {
                 setAdDiag(prev => [...prev, ev.message.replace("검색광고 진단:", "").trim()]);
               }
@@ -951,36 +952,36 @@ const ScanProgress = ({ url, goto, openResult }) => {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600 }}>Kakao 행정구역</span>
-                  <Tag tone={regions?.hDong || regions?.bDong ? "green" : "gray"}>
-                    {regions?.hDong || regions?.bDong ? "확보" : "미확보"}
+                  <span style={{ fontWeight: 600 }}>주소 파싱</span>
+                  <Tag tone={regions?.hDong || regions?.bDong || regions?.gu ? "green" : "gray"}>
+                    {regions?.gu ? "확보" : "미확보"}
                   </Tag>
                 </div>
                 {regions && (
                   <div style={{ color: "var(--ink-600)", fontSize: 11 }}>
-                    {regions.city || "?"} {regions.gu || "?"} · 행정 <b>{regions.hDong || "—"}</b> · 법정 <b>{regions.bDong || "—"}</b>
+                    {regions.city || "?"} {regions.gu || "?"} · 동: <b>{regions.hDong || "—"}</b>
                   </div>
                 )}
               </div>
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600 }}>Kakao POI (카테고리)</span>
+                  <span style={{ fontWeight: 600 }}>Naver Local Search POI</span>
                   <Tag tone={pois.length > 0 ? "green" : "danger"}>{pois.length}건</Tag>
                 </div>
                 {kakaoDiag.length > 0 && (
-                  <div style={{ color: "var(--ink-600)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
-                    {kakaoDiag.join(" · ")}
+                  <div style={{ color: "var(--ink-600)", fontSize: 11, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
+                    {kakaoDiag.slice(0, 6).join(" · ")}
                   </div>
                 )}
               </div>
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600 }}>Kakao 키워드 검색 명소</span>
-                  <Tag tone={landmarkBonus.length > 0 ? "green" : "gray"}>{landmarkBonus.length}건</Tag>
+                  <span style={{ fontWeight: 600 }}>인근 동 발견</span>
+                  <Tag tone={landmarkBonus.length > 0 ? "green" : "gray"}>{landmarkBonus.length}개</Tag>
                 </div>
                 {landmarkBonus.length > 0 && (
                   <div style={{ color: "var(--ink-600)", fontSize: 11 }} className="truncate">
-                    {landmarkBonus.slice(0, 5).join(", ")}{landmarkBonus.length > 5 ? " ..." : ""}
+                    {landmarkBonus.slice(0, 6).join(", ")}{landmarkBonus.length > 6 ? " ..." : ""}
                   </div>
                 )}
               </div>
