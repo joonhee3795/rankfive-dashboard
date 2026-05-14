@@ -700,6 +700,10 @@ const ScanProgress = ({ url, goto, openResult }) => {
   const [stage, setStage] = useState("crawl");
   const [info, setInfo] = useState(null);
   const [pois, setPois] = useState([]);
+  const [regions, setRegions] = useState(null);
+  const [landmarkBonus, setLandmarkBonus] = useState([]);
+  const [kakaoDiag, setKakaoDiag] = useState([]);
+  const [adDiag, setAdDiag] = useState([]);
   const [volumeMsg, setVolumeMsg] = useState(null);
   const [poolSize, setPoolSize] = useState(0);
   const [scannedCount, setScannedCount] = useState(0);
@@ -708,6 +712,7 @@ const ScanProgress = ({ url, goto, openResult }) => {
   const [log, setLog] = useState([]);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
+  const [copied, setCopied] = useState(false);
   const logRef = useRef(null);
   const startedRef = useRef(false);
 
@@ -761,6 +766,11 @@ const ScanProgress = ({ url, goto, openResult }) => {
               setPoolSize(prev => prev + (ev.poolSize || 0));
               pushLog({ kind: "ok", text: ev.message || `재시도 ${ev.round} — 새 키워드 ${ev.poolSize}개 추가` });
             } else if (ev.type === "info") {
+              if (ev.message?.startsWith("Kakao 진단:")) {
+                setKakaoDiag(prev => [...prev, ev.message.replace("Kakao 진단:", "").trim()]);
+              } else if (ev.message?.startsWith("검색광고 진단:")) {
+                setAdDiag(prev => [...prev, ev.message.replace("검색광고 진단:", "").trim()]);
+              }
               pushLog({ kind: "info", text: ev.message });
             } else if (ev.type === "saving") {
               pushLog({ kind: "info", text: `💾 ${ev.message}` });
@@ -771,6 +781,8 @@ const ScanProgress = ({ url, goto, openResult }) => {
                 pushLog({ kind: "ok", text: `매장: ${ev.info.storeName} (ID: ${ev.info.placeId})${c ? ` · 좌표 ${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}` : ""} — 지역 ${ev.info.locations?.length||0} · 메뉴 ${ev.info.menus?.length||0}` });
               } else if (ev.stage === "poi" && Array.isArray(ev.pois)) {
                 setPois(ev.pois);
+                if (ev.regions) setRegions(ev.regions);
+                if (ev.landmarkBonus) setLandmarkBonus(ev.landmarkBonus);
                 pushLog({ kind: "ok", text: `Kakao Local — 주변 POI ${ev.pois.length}개 확보: ${ev.pois.slice(0,5).map(p => p.name).join(", ")}${ev.pois.length > 5 ? " ..." : ""}` });
               } else if (ev.stage === "keywords") {
                 setPoolSize(ev.poolSize);
@@ -932,6 +944,61 @@ const ScanProgress = ({ url, goto, openResult }) => {
               <KpiCell label="남은 목표" value={Math.max(0, 10 - foundCount)}/>
             </div>
           </div>
+
+          {/* API 진단 상태 카드 — 스크롤 없이 항상 보임 */}
+          <div className="card" style={{ padding: 16 }}>
+            <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>API 진단</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600 }}>Kakao 행정구역</span>
+                  <Tag tone={regions?.hDong || regions?.bDong ? "green" : "gray"}>
+                    {regions?.hDong || regions?.bDong ? "확보" : "미확보"}
+                  </Tag>
+                </div>
+                {regions && (
+                  <div style={{ color: "var(--ink-600)", fontSize: 11 }}>
+                    {regions.city || "?"} {regions.gu || "?"} · 행정 <b>{regions.hDong || "—"}</b> · 법정 <b>{regions.bDong || "—"}</b>
+                  </div>
+                )}
+              </div>
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600 }}>Kakao POI (카테고리)</span>
+                  <Tag tone={pois.length > 0 ? "green" : "danger"}>{pois.length}건</Tag>
+                </div>
+                {kakaoDiag.length > 0 && (
+                  <div style={{ color: "var(--ink-600)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                    {kakaoDiag.join(" · ")}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600 }}>Kakao 키워드 검색 명소</span>
+                  <Tag tone={landmarkBonus.length > 0 ? "green" : "gray"}>{landmarkBonus.length}건</Tag>
+                </div>
+                {landmarkBonus.length > 0 && (
+                  <div style={{ color: "var(--ink-600)", fontSize: 11 }} className="truncate">
+                    {landmarkBonus.slice(0, 5).join(", ")}{landmarkBonus.length > 5 ? " ..." : ""}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600 }}>네이버 검색광고 keywordstool</span>
+                  <Tag tone={adDiag.some(d => /\d+건/.test(d)) ? "green" : "danger"}>
+                    {adDiag.length > 0 ? adDiag[adDiag.length - 1] : "대기"}
+                  </Tag>
+                </div>
+                {adDiag.length > 0 && (
+                  <div style={{ color: "var(--ink-600)", fontSize: 11, fontFamily: "var(--font-mono)" }} className="truncate">
+                    {adDiag.join(" · ")}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* 우측: 터미널 로그 */}
@@ -955,6 +1022,22 @@ const ScanProgress = ({ url, goto, openResult }) => {
             <div style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#8b949e", fontFamily: "var(--font-mono)" }}>
               rankfive @ scanner — {info?.storeName || "..."}
             </div>
+            <button
+              onClick={() => {
+                const text = log.map(l => `${l.t.toTimeString().slice(0,8)}  ${l.text}`).join("\n");
+                navigator.clipboard.writeText(text).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                });
+              }}
+              style={{
+                padding: "4px 10px", borderRadius: 6,
+                background: copied ? "#28ca42" : "#1f2937",
+                color: "white", fontSize: 11, fontWeight: 600,
+                border: "1px solid #2d3748", cursor: "pointer",
+              }}>
+              {copied ? "✓ 복사됨" : "복사"}
+            </button>
             {!done && !error && (
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#03C75A" }}>
                 <span style={{ width: 6, height: 6, borderRadius: 999, background: "#03C75A", boxShadow: "0 0 6px #03C75A" }}/>
